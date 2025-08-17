@@ -1,5 +1,5 @@
 /*
- * Pixel2CPP - Create pixel art and export Arduino-ready C++ code instantly
+ * Pixel2CPP - Main Application Component
  * 
  * MIT License
  * Copyright (c) 2025 CodeRandom
@@ -26,198 +26,143 @@
  * Commercial use and redistribution must comply with the MIT License terms.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import PixelCanvas from "./components/PixelCanvas.jsx";
-import { clamp, transparent, black, white, rgbaEq, rgbaToHex, parseCssColor } from "./lib/colors.js";
-import { pack1bit, pack1bitAlpha, packRGB565, packRGB24, packRGB332, packGray4, rgbTo332, hex565 } from "./lib/packers.js";
-import { download, copyToClipboard } from "./lib/io.js";
+import React, { useEffect, useRef, useState } from "react";
+import Header from "./components/Header.jsx";
+import Sidebar from "./components/Sidebar.jsx";
+import EditorTab from "./components/EditorTab.jsx";
+import SnippetsTab from "./components/SnippetsTab.jsx";
+import TestsTab from "./components/TestsTab.jsx";
+import CodeModal from "./components/CodeModal.jsx";
+import { useCanvasState } from "./hooks/useCanvasState.js";
+import { useCodeGeneration } from "./hooks/useCodeGeneration.js";
+import { useTests } from "./hooks/useTests.js";
+import { black, white, parseCssColor } from "./lib/colors.js";
 
-// ---------- Component ----------
+/**
+ * Main Pixel2CPP application component
+ * 
+ * This component orchestrates the entire pixel art editor application,
+ * managing state and coordinating between different UI components.
+ */
 export default function Pixel2CPP() {
-  // Core state (make sure w/h are defined before any use)
-  const [drawMode, setDrawMode] = useState("HORIZONTAL_1BIT"); // Draw mode from dropdown
-  const [outputFormat, setOutputFormat] = useState("ARDUINO_CODE"); // Output format from dropdown
-  const [displayType, setDisplayType] = useState("SSD1306"); // Display-specific options
-  const [w, setW] = useState(64);
-  const [h, setH] = useState(64);
-  const [zoom, setZoom] = useState(8); // pixel size in CSS px
+  // Core state
+  const [drawMode, setDrawMode] = useState("HORIZONTAL_1BIT");
+  const [outputFormat, setOutputFormat] = useState("ARDUINO_CODE");
+  const [displayType, setDisplayType] = useState("SSD1306");
+  const [zoom, setZoom] = useState(8);
   const [mirrorX, setMirrorX] = useState(false);
   const [mirrorY, setMirrorY] = useState(false);
-  const [tool, setTool] = useState("pen"); // pen | erase | fill | eyedropper
+  const [tool, setTool] = useState("pen");
   const [primary, setPrimary] = useState(black());
   const [secondary, setSecondary] = useState(white());
   const [name, setName] = useState("sprite");
-  const [backgroundColor, setBackgroundColor] = useState("black"); // black, white, transparent
-
-  // UI state
-  const [showCodeModal, setShowCodeModal] = useState(false);
-  const [copyStatus, setCopyStatus] = useState(""); // "", "copied", "error"
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [activeTab, setActiveTab] = useState("Editor"); // Editor | Snippets | Tests
+  const [backgroundColor, setBackgroundColor] = useState("transparent");
+  const [activeTab, setActiveTab] = useState("Editor");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  // Pixel buffer
-  const [data, setData] = useState(() => Array.from({ length: w * h }, () => transparent()));
-  const prevSize = useRef({ w, h });
+  // Custom hooks
+  const canvasState = useCanvasState(64, 64, backgroundColor, setBackgroundColor);
+  const codeGeneration = useCodeGeneration();
+  const tests = useTests();
 
-  // History
-  const [history, setHistory] = useState([]); // array of pixel arrays (deep copies)
-  const [redo, setRedo] = useState([]);
-  const canUndo = history.length > 0;
-  const canRedo = redo.length > 0;
-  const pushHistory = (d) => {
-    setHistory((h) => [...h, d.map((p) => ({ ...p }))]);
-    setRedo([]);
-  };
-
-  // Ensure data buffer matches size and preserves overlapping pixels on resize
-  useEffect(() => {
-    const { w: ow, h: oh } = prevSize.current;
-    if (ow === w && oh === h) return;
-    setData((prev) => {
-      const out = Array.from({ length: w * h }, () => transparent());
-      const cw = Math.min(ow, w);
-      const ch = Math.min(oh, h);
-      for (let y = 0; y < ch; y++) {
-        for (let x = 0; x < cw; x++) {
-          out[y * w + x] = prev[y * ow + x];
-        }
-      }
-      return out;
-    });
-    prevSize.current = { w, h };
-    setHistory([]);
-    setRedo([]);
-  }, [w, h]);
-
-  // Update background color when it changes
-  useEffect(() => {
-    setData((prev) => {
-      const newData = [...prev];
-      for (let i = 0; i < newData.length; i++) {
-        if (newData[i].a === 0) { // Transparent pixels
-          if (backgroundColor === "white") {
-            newData[i] = white();
-          } else if (backgroundColor === "black") {
-            newData[i] = black();
-          } else {
-            // transparent - keep as transparent
-            newData[i] = transparent();
-          }
-        }
-      }
-      return newData;
-    });
-  }, [backgroundColor]);
-
-  const idx = (x, y) => y * w + x;
-
-  // Drawing helpers
-  const drawAt = (x, y, pix, erase = false) => {
-    if (x < 0 || y < 0 || x >= w || y >= h) return;
-    setData((d) => {
-      const nd = d.slice();
-      const setPixel = (px, py) => {
-        if (px < 0 || py < 0 || px >= w || py >= h) return;
-        nd[idx(px, py)] = erase ? transparent() : pix;
-      };
-      setPixel(x, y);
-      if (mirrorX) setPixel(w - 1 - x, y);
-      if (mirrorY) setPixel(x, h - 1 - y);
-      if (mirrorX && mirrorY) setPixel(w - 1 - x, h - 1 - y);
-      return nd;
-    });
-  };
-
-  const floodFill = (sx, sy, target, replacement) => {
-    if (rgbaEq(target, replacement)) return;
-    const stack = [[sx, sy]];
-    const d = data.slice();
-    while (stack.length) {
-      const [x, y] = stack.pop();
-      if (x < 0 || y < 0 || x >= w || y >= h) continue;
-      const i = idx(x, y);
-      if (!rgbaEq(d[i], target)) continue;
-      d[i] = replacement;
-      stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
-    }
-    setData(d);
-  };
-
-  // Pointer
-  const canvasRef = useRef(null);
+  // Pointer handling
   const isMouseDown = useRef(false);
 
+  /**
+   * Get mouse coordinates relative to canvas
+   * @param {MouseEvent} e - Mouse event
+   * @returns {Object} Coordinates and bounds check
+   */
   const getXY = (e) => {
     const host = (e.target.closest('[data-canvas]'));
     if (!host) return { x: -1, y: -1, inBounds: false };
     const rect = host.getBoundingClientRect();
     const x = Math.floor((e.clientX - rect.left) / zoom);
     const y = Math.floor((e.clientY - rect.top) / zoom);
-    const inBounds = x >= 0 && y >= 0 && x < w && y < h;
+    const inBounds = x >= 0 && y >= 0 && x < canvasState.w && y < canvasState.h;
     return { x, y, inBounds };
   };
 
+  /**
+   * Handle pointer actions (drawing, erasing)
+   * @param {MouseEvent} e - Mouse event
+   */
   const handlePointerAction = (e) => {
     const { x, y, inBounds } = getXY(e);
     if (!inBounds) return;
     const button = (e.buttons & 2) ? "right" : "left";
     const color = button === "left" ? primary : secondary;
-    if (tool === "pen") drawAt(x, y, color, false);
-    else if (tool === "erase") drawAt(x, y, color, true);
+    if (tool === "pen") canvasState.drawAt(x, y, color, false, mirrorX, mirrorY);
+    else if (tool === "erase") canvasState.drawAt(x, y, color, true, mirrorX, mirrorY);
   };
 
+  /**
+   * Handle mouse down events
+   * @param {MouseEvent} e - Mouse event
+   */
   const handleMouseDown = (e) => {
     isMouseDown.current = true;
     if (tool === "fill") {
       const { x, y, inBounds } = getXY(e);
       if (!inBounds) return;
-      pushHistory(data);
+      canvasState.pushHistory(canvasState.data);
       const color = (e.buttons & 2) ? secondary : primary;
-      floodFill(x, y, data[idx(x, y)], color);
+      canvasState.floodFill(x, y, canvasState.data[canvasState.idx(x, y)], color);
     } else if (tool === "eyedropper") {
       const { x, y, inBounds } = getXY(e);
       if (!inBounds) return;
-      setPrimary(data[idx(x, y)]);
+      setPrimary(canvasState.data[canvasState.idx(x, y)]);
       setTool("pen");
     } else {
-      pushHistory(data);
+      canvasState.pushHistory(canvasState.data);
       handlePointerAction(e);
     }
   };
 
+  /**
+   * Handle mouse move events
+   * @param {MouseEvent} e - Mouse event
+   */
   const handleMouseMove = (e) => {
     if (isMouseDown.current && (tool === "pen" || tool === "erase")) {
       handlePointerAction(e);
     }
   };
 
+  /**
+   * Handle mouse up events
+   */
   const handleMouseUp = () => {
     isMouseDown.current = false;
   };
 
+  // Global mouse up handler
   useEffect(() => {
     const onWinUp = () => (isMouseDown.current = false);
     window.addEventListener("mouseup", onWinUp);
     return () => window.removeEventListener("mouseup", onWinUp);
   }, []);
 
-  // Import image → fit and (optionally) threshold to 1-bit
+  /**
+   * Import image and fit to canvas
+   * @param {File} file - Image file to import
+   */
   const importImage = (file) => {
     const img = new Image();
     img.onload = () => {
       const cnv = document.createElement("canvas");
-      cnv.width = w; cnv.height = h;
+      cnv.width = canvasState.w; 
+      cnv.height = canvasState.h;
       const ctx = cnv.getContext("2d");
-      const scale = Math.min(w / img.width, h / img.height);
+      const scale = Math.min(canvasState.w / img.width, canvasState.h / img.height);
       const dw = Math.max(1, Math.floor(img.width * scale));
       const dh = Math.max(1, Math.floor(img.height * scale));
-      const dx = Math.floor((w - dw) / 2);
-      const dy = Math.floor((h - dh) / 2);
-      ctx.clearRect(0, 0, w, h);
+      const dx = Math.floor((canvasState.w - dw) / 2);
+      const dy = Math.floor((canvasState.h - dh) / 2);
+      ctx.clearRect(0, 0, canvasState.w, canvasState.h);
       ctx.drawImage(img, 0, 0, img.width, img.height, dx, dy, dw, dh);
-      const id = ctx.getImageData(0, 0, w, h).data;
-      const out = Array.from({ length: w * h }, (_, i) => ({
+      const id = ctx.getImageData(0, 0, canvasState.w, canvasState.h).data;
+      const out = Array.from({ length: canvasState.w * canvasState.h }, (_, i) => ({
         r: id[i * 4],
         g: id[i * 4 + 1],
         b: id[i * 4 + 2],
@@ -230,835 +175,23 @@ export default function Pixel2CPP() {
           out[i] = luma > 127 ? white() : black();
         }
       }
-      pushHistory(data);
-      setData(out);
+      canvasState.pushHistory(canvasState.data);
+      canvasState.setData(out);
     };
     img.src = URL.createObjectURL(file);
   };
 
-  // Export helpers moved to lib/packers.js
-
-  const generateCppCode = () => {
-    const safeName = name.replace(/[^a-zA-Z0-9_]/g, "_");
-    
-    console.log('generateCppCode called with:', { drawMode, outputFormat, w, h, dataLength: data.length });
-    
-    // Validate data
-    if (!data || data.length !== w * h) {
-      console.error('Invalid data:', { dataLength: data?.length, expectedLength: w * h, w, h });
-      return `// Error: Invalid data array (length: ${data?.length}, expected: ${w * h})`;
-    }
-    
-    // Helper function to safely call packer functions
-    const safePack = (packerFunc, ...args) => {
-      try {
-        const result = packerFunc(...args);
-        console.log(`${packerFunc.name} result:`, result.length, 'bytes');
-        return result;
-      } catch (error) {
-        console.error(`Error in ${packerFunc.name}:`, error);
-        return [];
-      }
-    };
-    
-    // Determine data and format based on draw mode
-    let bytes = [], byteStr, dataType = "uint8_t", dataFormat = "pixels";
-    
-    if (drawMode === "HORIZONTAL_1BIT") {
-      bytes = safePack(pack1bit, data, w, h, 'horizontal');
-      dataType = "uint8_t";
-      dataFormat = "bits";
-    } else if (drawMode === "VERTICAL_1BIT") {
-      bytes = safePack(pack1bit, data, w, h, 'vertical');
-      dataType = "uint8_t";
-      dataFormat = "bits";
-    } else if (drawMode === "HORIZONTAL_ALPHA") {
-      bytes = safePack(pack1bitAlpha, data, w, h, 'horizontal');
-      dataType = "uint8_t";
-      dataFormat = "alpha";
-    } else if (drawMode === "HORIZONTAL_RGB565") {
-      bytes = safePack(packRGB565, data, w, h);
-      dataType = "uint16_t";
-      dataFormat = "pixels";
-    } else if (drawMode === "HORIZONTAL_RGB888_24") {
-      bytes = safePack(packRGB24, data, w, h);
-      dataType = "uint8_t";
-      dataFormat = "pixels";
-    } else if (drawMode === "HORIZONTAL_RGB888_32") {
-      // 32-bit RGBA format
-      bytes = [];
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const p = data[y * w + x];
-          bytes.push(p.r, p.g, p.b, p.a);
-        }
-      }
-      dataType = "uint8_t";
-      dataFormat = "pixels";
-    } else if (drawMode === "HORIZONTAL_RGB332") {
-      bytes = safePack(packRGB332, data, w, h);
-      dataType = "uint8_t";
-      dataFormat = "pixels";
-    } else if (drawMode === "HORIZONTAL_GRAY4") {
-      bytes = safePack(packGray4, data, w, h);
-      dataType = "uint8_t";
-      dataFormat = "pixels";
-    } else {
-      // Fallback for unknown draw modes - use 1-bit horizontal
-      console.warn(`Unknown draw mode: ${drawMode}, falling back to HORIZONTAL_1BIT`);
-      bytes = safePack(pack1bit, data, w, h, 'horizontal');
-      dataType = "uint8_t";
-      dataFormat = "bits";
-    }
-    
-    console.log('Generated bytes:', { bytesLength: bytes.length, dataType, dataFormat });
-    
-    // Validate bytes were generated
-    if (!bytes || bytes.length === 0) {
-      console.error('No bytes generated');
-      return `// Error: No bytes generated for ${drawMode} format`;
-    }
-    
-    // Generate byte string based on output format
-    try {
-      if (outputFormat === "PLAIN_BYTES") {
-        return generatePlainBytes(bytes, safeName, w, h, dataType, dataFormat, drawMode);
-      } else if (outputFormat === "ARDUINO_CODE") {
-        return generateArduinoCode(bytes, safeName, w, h, dataType, dataFormat, drawMode);
-      } else if (outputFormat === "ARDUINO_SINGLE_BITMAP") {
-        return generateArduinoSingleBitmap(bytes, safeName, w, h, dataType, dataFormat);
-      } else if (outputFormat === "GFX_BITMAP_FONT") {
-        return generateGFXBitmapFont(bytes, safeName, w, h);
-      } else {
-        console.warn(`Unknown output format: ${outputFormat}, falling back to ARDUINO_CODE`);
-        return generateArduinoCode(bytes, safeName, w, h, dataType, dataFormat, drawMode);
-      }
-    } catch (error) {
-      console.error('Error generating output format:', error);
-      return `// Error generating ${outputFormat} format: ${error.message}`;
-    }
-    
-    // Legacy fallback for old mode system
-    if (drawMode === "HORIZONTAL_1BIT") {
-      byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
-      return `// Generated by Pixel2CPP (1-bit)
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const uint8_t ${safeName}_bits[] PROGMEM = {
-  ${byteStr}
-};
-
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
-
-void setup(){
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.drawBitmap(0, 0, ${safeName}_bits, ${safeName}_w, ${safeName}_h, 1);
-  display.display();
-}
-
-void loop(){}`;
-         } else if (drawMode === "HORIZONTAL_RGB565") {
-       const words = packRGB565(data, w, h);
-       const wordStr = words.map(hex565).join(", ");
-      return `// Generated by Pixel2CPP (RGB565 for TFT displays)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>  // Use ST7789, ILI9341, etc. for your display
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const uint16_t ${safeName}_pixels[] PROGMEM = {
-  ${wordStr}
-};
-
-// Define pins for your display (adjust for your setup)
-#define TFT_CS   10
-#define TFT_RST  9
-#define TFT_DC   8
-
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize display
-  tft.initR(INITR_BLACKTAB);  // Use INITR_GREENTAB, INITR_REDTAB for other variants
-  tft.setRotation(0);         // Adjust rotation as needed (0-3)
-  tft.fillScreen(ST77XX_BLACK);
-  
-  // Display the image at position (0, 0)
-  drawImage(0, 0);
-}
-
-void loop() {
-  // Your main code here
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  // Fast method: set address window and write pixels directly
-  tft.startWrite();
-  tft.setAddrWindow(x0, y0, ${safeName}_w, ${safeName}_h);
-  
-  for (uint16_t i = 0; i < ${safeName}_w * ${safeName}_h; i++) {
-    uint16_t color = pgm_read_word(&${safeName}_pixels[i]);
-    tft.writePixel(color);
-  }
-  
-  tft.endWrite();
-}
-
-/* Alternative method (slower but more flexible):
-void drawImagePixelByPixel(int16_t x0, int16_t y0) {
-  for (uint16_t y = 0; y < ${safeName}_h; y++) {
-    for (uint16_t x = 0; x < ${safeName}_w; x++) {
-      uint16_t color = pgm_read_word(&${safeName}_pixels[y * ${safeName}_w + x]);
-      tft.drawPixel(x0 + x, y0 + y, color);
-    }
-  }
-}
-*/`;
-         } else if (drawMode === "HORIZONTAL_RGB888_24") {
-       const bytes = packRGB24(data, w, h);
-       const byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
-      return `// Generated by Pixel2CPP (RGB24 for ESP32/high-memory displays)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>  // Use appropriate display library
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const uint8_t ${safeName}_pixels[] PROGMEM = {
-  ${byteStr}
-};
-
-// Define pins for your display
-#define TFT_CS   10
-#define TFT_RST  9
-#define TFT_DC   8
-
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize display
-  tft.begin();
-  tft.setRotation(0);
-  tft.fillScreen(ILI9341_BLACK);
-  
-  // Display the image
-  drawImage(0, 0);
-}
-
-void loop() {
-  // Your main code here
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  // Convert RGB24 to RGB565 on the fly for display
-  for (uint16_t y = 0; y < ${safeName}_h; y++) {
-    for (uint16_t x = 0; x < ${safeName}_w; x++) {
-      uint16_t index = (y * ${safeName}_w + x) * 3;
-      uint8_t r = pgm_read_byte(&${safeName}_pixels[index]);
-      uint8_t g = pgm_read_byte(&${safeName}_pixels[index + 1]);
-      uint8_t b = pgm_read_byte(&${safeName}_pixels[index + 2]);
-      
-      // Convert to RGB565
-      uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-      tft.drawPixel(x0 + x, y0 + y, color);
-    }
-  }
-}`;
-         } else if (drawMode === "HORIZONTAL_RGB332") {
-       const bytes = packRGB332(data, w, h);
-       const byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
-      return `// Generated by Pixel2CPP (RGB332 for low-memory/retro displays)
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1331.h>  // Or other 8-bit color displays
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const uint8_t ${safeName}_pixels[] PROGMEM = {
-  ${byteStr}
-};
-
-// Define pins for your display
-#define OLED_CS   10
-#define OLED_RST  9
-#define OLED_DC   8
-
-Adafruit_SSD1331 display = Adafruit_SSD1331(OLED_CS, OLED_DC, OLED_RST);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize display
-  display.begin();
-  display.fillScreen(0x00);
-  
-  // Display the image
-  drawImage(0, 0);
-}
-
-void loop() {
-  // Your main code here
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  for (uint16_t y = 0; y < ${safeName}_h; y++) {
-    for (uint16_t x = 0; x < ${safeName}_w; x++) {
-      uint8_t color332 = pgm_read_byte(&${safeName}_pixels[y * ${safeName}_w + x]);
-      display.drawPixel(x0 + x, y0 + y, color332);
-    }
-  }
-}
-
-/* Color conversion reference:
-   RGB332: RRRGGGBB (8-bit)
-   - Red: 3 bits (0-7) 
-   - Green: 3 bits (0-7)
-   - Blue: 2 bits (0-3)
-*/`;
-         } else if (drawMode === "HORIZONTAL_GRAY4") {
-       const bytes = packGray4(data, w, h);
-       const byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
-      return `// Generated by Pixel2CPP (4-bit Grayscale for E-ink/EPD)
-#include <Adafruit_GFX.h>
-#include <Adafruit_EPD.h>  // Use appropriate e-ink library
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const uint8_t ${safeName}_pixels[] PROGMEM = {
-  ${byteStr}
-};
-
-// Define pins for your e-ink display
-#define EPD_CS     10
-#define EPD_DC     8
-#define EPD_RESET  9
-#define EPD_BUSY   7
-
-// Adafruit_IL0373 display(152, 152, EPD_DC, EPD_RESET, EPD_CS, SRAM_CS, EPD_BUSY);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize e-ink display
-  // display.begin();
-  // display.clearBuffer();
-  
-  // Display the image
-  drawGrayImage(0, 0);
-}
-
-void loop() {
-  // E-ink displays typically don't need continuous refresh
-}
-
-void drawGrayImage(int16_t x0, int16_t y0) {
-  // Extract 4-bit grayscale values and display
-  for (uint16_t y = 0; y < ${safeName}_h; y++) {
-    for (uint16_t x = 0; x < ${safeName}_w; x++) {
-      uint16_t byteIndex = (y * ${safeName}_w + x) / 2;
-      uint8_t packedByte = pgm_read_byte(&${safeName}_pixels[byteIndex]);
-      
-      uint8_t grayValue;
-      if (x % 2 == 0) {
-        grayValue = (packedByte >> 4) & 0x0F; // High nibble
-      } else {
-        grayValue = packedByte & 0x0F; // Low nibble
-      }
-      
-      // Convert 4-bit (0-15) to 8-bit (0-255) for display
-      uint8_t gray8 = grayValue * 17; // 15 * 17 = 255
-      
-      // Use appropriate display function for your e-ink library
-      // display.drawPixel(x0 + x, y0 + y, gray8);
-    }
-  }
-  
-  // display.display(); // Refresh e-ink display
-}
-
-/* 4-bit Grayscale format:
-   Each byte contains 2 pixels: AAAABBBB
-   - High nibble (AAAA): First pixel grayscale (0-15)
-   - Low nibble (BBBB): Second pixel grayscale (0-15)
-   - 0 = Black, 15 = White
-*/`;
-    }
-  };
-
-  // Output format generators
-  const generatePlainBytes = (bytes, safeName, w, h, dataType, dataFormat, drawMode) => {
-    const formatByte = (b) => dataType === "uint16_t" 
-      ? "0x" + b.toString(16).toUpperCase().padStart(4, "0")
-      : "0x" + b.toString(16).toUpperCase().padStart(2, "0");
-    
-    const byteStr = bytes.map(formatByte).join(", ");
-    
-    // Generate working Arduino code based on draw mode
-    if (drawMode.includes("1BIT") || drawMode.includes("ALPHA")) {
-      return `// Generated by Pixel2CPP (${drawMode})
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_data[] PROGMEM = {
-  ${byteStr}
-};
-
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize display
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.drawBitmap(0, 0, ${safeName}_data, ${safeName}_w, ${safeName}_h, 1);
-  display.display();
-}
-
-void loop() {
-  // Your main code here
-}`;
-    } else if (drawMode.includes("RGB565")) {
-      return `// Generated by Pixel2CPP (RGB565)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_data[] PROGMEM = {
-  ${byteStr}
-};
-
-#define TFT_CS   10
-#define TFT_RST  9
-#define TFT_DC   8
-
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize display
-  tft.initR(INITR_BLACKTAB);
-  tft.setRotation(0);
-  tft.fillScreen(ST77XX_BLACK);
-  
-  // Display the image
-  drawImage(0, 0);
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  tft.startWrite();
-  tft.setAddrWindow(x0, y0, ${safeName}_w, ${safeName}_h);
-  for (uint16_t i = 0; i < ${safeName}_w * ${safeName}_h; i++) {
-    uint16_t color = pgm_read_word(&${safeName}_data[i]);
-    tft.writePixel(color);
-  }
-  tft.endWrite();
-}
-
-void loop() {
-  // Your main code here
-}`;
-    } else if (drawMode.includes("RGB888_24")) {
-      return `// Generated by Pixel2CPP (RGB24)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_data[] PROGMEM = {
-  ${byteStr}
-};
-
-#define TFT_CS   10
-#define TFT_RST  9
-#define TFT_DC   8
-
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize display
-  tft.begin();
-  tft.setRotation(0);
-  tft.fillScreen(ILI9341_BLACK);
-  
-  // Display the image
-  drawImage(0, 0);
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  for (uint16_t y = 0; y < ${safeName}_h; y++) {
-    for (uint16_t x = 0; x < ${safeName}_w; x++) {
-      uint16_t index = (y * ${safeName}_w + x) * 3;
-      uint8_t r = pgm_read_byte(&${safeName}_data[index]);
-      uint8_t g = pgm_read_byte(&${safeName}_data[index + 1]);
-      uint8_t b = pgm_read_byte(&${safeName}_data[index + 2]);
-      
-      // Convert to RGB565 for display
-      uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-      tft.drawPixel(x0 + x, y0 + y, color);
-    }
-  }
-}
-
-void loop() {
-  // Your main code here
-}`;
-    } else if (drawMode.includes("RGB888_32")) {
-      return `// Generated by Pixel2CPP (RGBA32)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_data[] PROGMEM = {
-  ${byteStr}
-};
-
-#define TFT_CS   10
-#define TFT_RST  9
-#define TFT_DC   8
-
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize display
-  tft.begin();
-  tft.setRotation(0);
-  tft.fillScreen(ILI9341_BLACK);
-  
-  // Display the image
-  drawImage(0, 0);
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  for (uint16_t y = 0; y < ${safeName}_h; y++) {
-    for (uint16_t x = 0; x < ${safeName}_w; x++) {
-      uint16_t index = (y * ${safeName}_w + x) * 4;
-      uint8_t r = pgm_read_byte(&${safeName}_data[index]);
-      uint8_t g = pgm_read_byte(&${safeName}_data[index + 1]);
-      uint8_t b = pgm_read_byte(&${safeName}_data[index + 2]);
-      uint8_t a = pgm_read_byte(&${safeName}_data[index + 3]);
-      
-      // Only draw if alpha > threshold
-      if (a > 127) {
-        // Convert to RGB565 for display
-        uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-        tft.drawPixel(x0 + x, y0 + y, color);
-      }
-    }
-  }
-}
-
-void loop() {
-  // Your main code here
-}`;
-    } else {
-      // Fallback for other modes - generic display code with the data
-      return `// Generated by Pixel2CPP (${drawMode})
-#include <Adafruit_GFX.h>
-// Add your display library here (e.g., #include <Adafruit_SSD1306.h>)
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_data[] PROGMEM = {
-  ${byteStr}
-};
-
-// Add your display initialization here
-// Example: Adafruit_SSD1306 display(128, 64, &Wire, -1);
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Initialize your display here
-  // Example: display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  
-  // Add your image display code here
-  // Example: display.clearDisplay();
-  //          display.drawBitmap(0, 0, ${safeName}_data, ${safeName}_w, ${safeName}_h, 1);
-  //          display.display();
-}
-
-void loop() {
-  // Your main code here
-}`;
-    }
-  };
-
-  const generateArduinoCode = (bytes, safeName, w, h, dataType, dataFormat, drawMode) => {
-    const formatByte = (b) => dataType === "uint16_t" 
-      ? "0x" + b.toString(16).toUpperCase().padStart(4, "0")
-      : "0x" + b.toString(16).toUpperCase().padStart(2, "0");
-    
-    const byteStr = bytes.map(formatByte).join(", ");
-    
-    if (drawMode.includes("1BIT")) {
-      return `// Generated by Pixel2CPP (${drawMode})
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_${dataFormat}[] PROGMEM = {
-  ${byteStr}
-};
-
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
-
-void setup() {
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.drawBitmap(0, 0, ${safeName}_${dataFormat}, ${safeName}_w, ${safeName}_h, 1);
-  display.display();
-}
-
-void loop() {}`;
-    } else if (drawMode.includes("RGB565")) {
-      return `// Generated by Pixel2CPP (RGB565)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_${dataFormat}[] PROGMEM = {
-  ${byteStr}
-};
-
-#define TFT_CS   10
-#define TFT_RST  9
-#define TFT_DC   8
-
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-
-void setup() {
-  tft.initR(INITR_BLACKTAB);
-  tft.fillScreen(ST77XX_BLACK);
-  drawImage(0, 0);
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  tft.startWrite();
-  tft.setAddrWindow(x0, y0, ${safeName}_w, ${safeName}_h);
-  for (uint16_t i = 0; i < ${safeName}_w * ${safeName}_h; i++) {
-    uint16_t color = pgm_read_word(&${safeName}_${dataFormat}[i]);
-    tft.writePixel(color);
-  }
-  tft.endWrite();
-}
-
-void loop() {}`;
-    } else {
-      return `// Generated by Pixel2CPP (${drawMode})
-#include <Adafruit_GFX.h>
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const ${dataType} ${safeName}_${dataFormat}[] PROGMEM = {
-  ${byteStr}
-};
-
-// Add your display setup and drawing code here`;
-    }
-  };
-
-  const generateArduinoSingleBitmap = (bytes, safeName, w, h, dataType, dataFormat) => {
-    const formatByte = (b) => dataType === "uint16_t" 
-      ? "0x" + b.toString(16).toUpperCase().padStart(4, "0")
-      : "0x" + b.toString(16).toUpperCase().padStart(2, "0");
-    
-    const byteStr = bytes.map(formatByte).join(", ");
-    
-    return `// Single bitmap array - ${safeName}
-// ${w}x${h} pixels, ${bytes.length} bytes
-const ${dataType} ${safeName}[] PROGMEM = { ${byteStr} };`;
-  };
-
-  const generateGFXBitmapFont = (bytes, safeName, w, h) => {
-    const byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
-    
-    return `// GFX Bitmap Font format - ${safeName}
-#include <Adafruit_GFX.h>
-
-const uint8_t ${safeName}Bitmaps[] PROGMEM = {
-  ${byteStr}
-};
-
-const GFXglyph ${safeName}Glyphs[] PROGMEM = {
-  { 0, ${w}, ${h}, ${w}, 0, 0 } // Single glyph covering entire bitmap
-};
-
-const GFXfont ${safeName} PROGMEM = {
-  (uint8_t *)${safeName}Bitmaps,
-  (GFXglyph *)${safeName}Glyphs,
-  0, 0, ${h}
-};`;
-  };
-
-  const exportCpp = () => {
-    const code = generateCppCode();
-    const safeName = name.replace(/[^a-zA-Z0-9_]/g, "_");
-    download(`${safeName}.h`, code);
-  };
-
-  const handleGenerateCode = async () => {
-    try {
-      setIsGenerating(true);
-      console.log('Generating code for:', { drawMode, outputFormat, w, h, dataLength: data.length });
-      setShowCodeModal(true);
-    } catch (error) {
-      console.error('Error generating code:', error);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  const handleCopyCode = async () => {
-    const code = generateCppCode();
-    const success = await copyToClipboard(code);
-    setCopyStatus(success ? "copied" : "error");
-    setTimeout(() => setCopyStatus(""), 2000);
-  };
-
-  const clearCanvas = () => {
-    pushHistory(data);
-    setData(Array.from({ length: w * h }, () => transparent()));
-  };
-
+  /**
+   * Swap primary and secondary colors
+   */
   const swapColors = () => {
     setPrimary((p) => ({ ...secondary }));
     setSecondary((s) => ({ ...primary }));
   };
 
-  // ---------- Built-in tests ----------
-  const [testResults, setTestResults] = useState([]);
-  const runTests = () => {
-    const results = [];
-
-    // Test 1: 1-bit horizontal exact 8 pixels 10101010 → 0xAA
-    {
-      const tw = 8, th = 1;
-      const px = [];
-      for (let i = 0; i < 8; i++) px.push((i % 2 === 0) ? black() : white()); // 1,0,1,0,... (black=1)
-      const bytes = pack1bit(px, tw, th, 'horizontal');
-      const expect = [0xAA];
-      results.push({ name: "1BIT Horizontal 8px 10101010", pass: JSON.stringify(bytes) === JSON.stringify(expect), got: bytes, expect });
-    }
-
-    // Test 2: 1-bit horizontal width 10, row of all ones → [0xFF, 0xC0]
-    {
-      const tw = 10, th = 1;
-      const px = Array.from({ length: tw * th }, () => black());
-      const bytes = pack1bit(px, tw, th, 'horizontal');
-      const expect = [0xFF, 0xC0];
-      results.push({ name: "1BIT Horizontal 10px row all 1s", pass: JSON.stringify(bytes) === JSON.stringify(expect), got: bytes, expect });
-    }
-
-    // Test 3: 1-bit vertical packing
-    {
-      const tw = 1, th = 8;
-      const px = [];
-      for (let i = 0; i < 8; i++) px.push((i % 2 === 0) ? black() : white()); // 1,0,1,0,... (black=1)
-      const bytes = pack1bit(px, tw, th, 'vertical');
-      const expect = [0xAA]; // Same pattern but vertical
-      results.push({ name: "1BIT Vertical 1x8 10101010", pass: JSON.stringify(bytes) === JSON.stringify(expect), got: bytes, expect });
-    }
-
-    // Test 4: 1-bit alpha map
-    {
-      const tw = 8, th = 1;
-      const px = [];
-      for (let i = 0; i < 8; i++) px.push({ r: 255, g: 255, b: 255, a: (i % 2 === 0) ? 255 : 0 }); // alpha pattern
-      const bytes = pack1bitAlpha(px, tw, th, 'horizontal');
-      const expect = [0xAA];
-      results.push({ name: "1BIT Alpha map 8px pattern", pass: JSON.stringify(bytes) === JSON.stringify(expect), got: bytes, expect });
-    }
-
-    // Test 5: RGB565 primary colors
-    {
-      const tw = 3, th = 1;
-      const px = [
-        { r: 255, g: 0, b: 0, a: 255 },
-        { r: 0, g: 255, b: 0, a: 255 },
-        { r: 0, g: 0, b: 255, a: 255 },
-      ];
-      const words = packRGB565(px, tw, th);
-      const expect = [0xF800, 0x07E0, 0x001F];
-      results.push({ name: "RGB565 R,G,B", pass: JSON.stringify(words) === JSON.stringify(expect), got: words, expect });
-    }
-
-    // Test 6: RGB24 format - 2x2 image with RGB colors
-    {
-      const tw = 2, th = 2;
-      const px = [
-        { r: 255, g: 0, b: 0, a: 255 },     // Red
-        { r: 0, g: 255, b: 0, a: 255 },     // Green
-        { r: 0, g: 0, b: 255, a: 255 },     // Blue
-        { r: 255, g: 255, b: 255, a: 255 }, // White
-      ];
-      const rgb24Data = packRGB24(px, tw, th);
-      const expect = [
-        255, 0, 0,    // Red (R=255, G=0, B=0)
-        0, 255, 0,    // Green (R=0, G=255, B=0)
-        0, 0, 255,    // Blue (R=0, G=0, B=255)
-        255, 255, 255 // White (R=255, G=255, B=255)
-      ];
-      results.push({ name: "RGB24 2x2 colors", pass: JSON.stringify(rgb24Data) === JSON.stringify(expect), got: rgb24Data, expect });
-    }
-
-    // Test 7: RGB332 format - primary colors
-    {
-      const tw = 3, th = 1;
-      const px = [
-        { r: 255, g: 0, b: 0, a: 255 },     // Red
-        { r: 0, g: 255, b: 0, a: 255 },     // Green
-        { r: 0, g: 0, b: 255, a: 255 },     // Blue
-      ];
-      const rgb332Data = packRGB332(px, tw, th);
-      const expect = [
-        0xE0,  // Red: 111 000 00 (R=7, G=0, B=0)
-        0x1C,  // Green: 000 111 00 (R=0, G=7, B=0)
-        0x03   // Blue: 000 000 11 (R=0, G=0, B=3)
-      ];
-      results.push({ name: "RGB332 R,G,B", pass: JSON.stringify(rgb332Data) === JSON.stringify(expect), got: rgb332Data, expect });
-    }
-
-    // Test 8: GRAY4 format - grayscale values
-    {
-      const tw = 4, th = 1;
-      const px = [
-        { r: 0, g: 0, b: 0, a: 255 },       // Black (0)
-        { r: 85, g: 85, b: 85, a: 255 },    // Dark gray (~5)
-        { r: 170, g: 170, b: 170, a: 255 }, // Light gray (~10)
-        { r: 255, g: 255, b: 255, a: 255 }, // White (15)
-      ];
-      const gray4Data = packGray4(px, tw, th);
-      const expect = [
-        0x05,  // First byte: 0000 0101 (black=0, dark gray=5)
-        0xAF   // Second byte: 1010 1111 (light gray=10, white=15)
-      ];
-      results.push({ name: "GRAY4 grayscale", pass: JSON.stringify(gray4Data) === JSON.stringify(expect), got: gray4Data, expect });
-    }
-
-    setTestResults(results);
-  };
-
-  const testsPassed = useMemo(() => testResults.every((t) => t.pass), [testResults]);
-
-  // Keyboard shortcuts
+  /**
+   * Handle keyboard shortcuts
+   */
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Don't trigger shortcuts when typing in input fields
@@ -1069,23 +202,13 @@ const GFXfont ${safeName} PROGMEM = {
       // Ctrl+Z: Undo
       if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
-        if (canUndo) {
-          setRedo((r) => [data.map(p=>({...p})), ...r]); 
-          const last = history[history.length - 1]; 
-          setHistory((h) => h.slice(0, -1)); 
-          setData(last.map(p => ({ ...p }))); 
-        }
+        canvasState.undo();
       }
 
       // Ctrl+Y or Ctrl+Shift+Z: Redo
       if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) {
         e.preventDefault();
-        if (canRedo) {
-          const [next, ...rest] = redo; 
-          setHistory((h) => [...h, data.map(p=>({...p}))]); 
-          setData(next.map(p => ({ ...p }))); 
-          setRedo(rest); 
-        }
+        canvasState.redoAction();
       }
 
       // Tool shortcuts
@@ -1109,7 +232,7 @@ const GFXfont ${safeName} PROGMEM = {
             break;
           case 'c': // Clear canvas
             e.preventDefault();
-            clearCanvas();
+            canvasState.clearCanvas();
             break;
           case 'x': // Swap colors
             e.preventDefault();
@@ -1140,365 +263,74 @@ const GFXfont ${safeName} PROGMEM = {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canUndo, canRedo, data, history, redo]);
+  }, [canvasState, tool, primary, secondary]);
 
-  // ---------- UI ----------
+  // Wrapper functions for code generation
+  const handleGenerateCode = () => {
+    codeGeneration.handleGenerateCode();
+  };
+
+  const handleCopyCode = () => {
+    codeGeneration.handleCopyCode(drawMode, outputFormat, canvasState.w, canvasState.h, canvasState.data, name);
+  };
+
+  const exportCpp = () => {
+    codeGeneration.exportCpp(drawMode, outputFormat, canvasState.w, canvasState.h, canvasState.data, name);
+  };
+
+  const generateCppCode = () => {
+    return codeGeneration.generateCppCode(drawMode, outputFormat, canvasState.w, canvasState.h, canvasState.data, name);
+  };
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <div className="flex flex-col h-screen">
-        {/* Enhanced Header with Branding */}
-        <header className="bg-gradient-to-r from-neutral-900 to-neutral-800 border-b border-neutral-700">
-          <div className="flex items-center justify-between gap-4 px-3 sm:px-4 py-4">
-            {/* Logo and Title Section */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-                  <span className="text-white font-bold text-sm">P2C</span>
-                </div>
-                <div>
-                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
-                    Pixel2CPP
-                  </h1>
-                  <p className="text-xs text-neutral-400 -mt-1">
-                    Made by <a href="https://coderandom.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">CodeRandom</a>
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              <input 
-                className="bg-neutral-800 rounded px-3 py-1 outline-none text-sm border border-neutral-700 focus:border-blue-500 transition-colors" 
-                value={name} 
-                onChange={(e) => setName(e.target.value)} 
-                title="Asset name" 
-                placeholder="Asset name"
-                aria-label="Asset name for exported code"
-              />
-              <label className="px-3 py-1.5 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 cursor-pointer text-sm transition-colors">
-                Upload Image
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) importImage(f); }} 
-                  className="hidden"
-                  aria-label="Upload image file"
-                />
-              </label>
-              <button 
-                onClick={handleGenerateCode} 
-                disabled={isGenerating}
-                className="px-3 py-1.5 rounded-xl bg-blue-500 text-white font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-colors"
-                aria-label="Generate C++ code"
-              >
-                {isGenerating ? "Generating..." : "Generate Code"}
-              </button>
-              <button 
-                onClick={exportCpp} 
-                className="px-3 py-1.5 rounded-xl bg-emerald-500 text-black font-medium hover:brightness-110 text-sm transition-colors"
-                aria-label="Export as header file"
-              >
-                Export .h
-              </button>
-            </div>
-          </div>
-        </header>
+        {/* Header */}
+        <Header 
+          name={name}
+          setName={setName}
+          importImage={importImage}
+          handleGenerateCode={handleGenerateCode}
+          exportCpp={exportCpp}
+          isGenerating={codeGeneration.isGenerating}
+        />
 
         <div className="flex flex-1 min-h-0">
-          {/* Collapsible Sidebar */}
-          <aside className={`${sidebarCollapsed ? 'w-16' : 'w-80'} min-w-0 bg-neutral-900 border-r border-neutral-800 flex flex-col transition-all duration-300`}>
-            {/* Sidebar Header with Toggle */}
-            <div className="flex items-center justify-between p-4 border-b border-neutral-800">
-              {!sidebarCollapsed && (
-                <h2 className="font-semibold text-lg">Tools & Settings</h2>
-              )}
-              <button
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                className="p-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 transition-colors"
-                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              >
-                {sidebarCollapsed ? "→" : "←"}
-              </button>
-            </div>
-
-            {/* Sidebar Content */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
-              {!sidebarCollapsed && (
-                <>
-                  {/* Quick Tools */}
-                  <div className="space-y-3">
-                    <h3 className="font-medium text-sm text-neutral-300">Quick Tools</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
-                        <button 
-                          key={k} 
-                          onClick={() => setTool(k)} 
-                          className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                            tool === k 
-                              ? "bg-emerald-500 text-black shadow-lg" 
-                              : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
-                          }`}
-                          aria-label={`Select ${k} tool`}
-                        >
-                          {k.charAt(0).toUpperCase() + k.slice(1)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Colors */}
-                  <div className="space-y-3">
-                    <h3 className="font-medium text-sm text-neutral-300">Colors</h3>
-                    <div className="flex items-center gap-3">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-neutral-400">Primary</span>
-                        <input 
-                          type="color" 
-                          value={rgbaToHex(primary)} 
-                          onChange={(e) => setPrimary(parseCssColor(e.target.value))} 
-                          className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
-                          aria-label="Primary color picker"
-                        />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs text-neutral-400">Secondary</span>
-                        <input 
-                          type="color" 
-                          value={rgbaToHex(secondary)} 
-                          onChange={(e) => setSecondary(parseCssColor(e.target.value))} 
-                          className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
-                          aria-label="Secondary color picker"
-                        />
-                      </div>
-                      <button 
-                        onClick={swapColors} 
-                        className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs transition-colors self-end"
-                        aria-label="Swap primary and secondary colors"
-                      >
-                        Swap
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Canvas Settings */}
-                  <div className="space-y-3">
-                    <h3 className="font-medium text-sm text-neutral-300">Canvas</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="flex flex-col gap-1">
-                        <span className="text-xs text-neutral-400">Width</span>
-                        <input 
-                          type="number" 
-                          min={1} 
-                          max={256} 
-                          value={w} 
-                          onChange={(e) => setW(clamp(parseInt(e.target.value) || 1, 1, 256))} 
-                          className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-blue-500 transition-colors" 
-                          aria-label="Canvas width in pixels"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-xs text-neutral-400">Height</span>
-                        <input 
-                          type="number" 
-                          min={1} 
-                          max={256} 
-                          value={h} 
-                          onChange={(e) => setH(clamp(parseInt(e.target.value) || 1, 1, 256))} 
-                          className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-blue-500 transition-colors" 
-                          aria-label="Canvas height in pixels"
-                        />
-                      </label>
-                    </div>
-                    
-                    <label className="flex flex-col gap-1">
-                      <span className="text-xs text-neutral-400">Zoom: {zoom}×</span>
-                      <input 
-                        type="range" 
-                        min={4} 
-                        max={32} 
-                        value={zoom} 
-                        onChange={(e) => setZoom(parseInt(e.target.value))} 
-                        className="w-full" 
-                        aria-label="Canvas zoom level"
-                      />
-                    </label>
-                  </div>
-
-                  {/* Export Settings */}
-                  <div className="space-y-3">
-                    <h3 className="font-medium text-sm text-neutral-300">Export</h3>
-                    <label className="flex flex-col gap-1">
-                      <span className="text-xs text-neutral-400">Format</span>
-                      <select 
-                        value={drawMode} 
-                        onChange={(e) => setDrawMode(e.target.value)} 
-                        className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-purple-500 transition-colors"
-                        aria-label="Select draw mode"
-                      >
-                        <option value="HORIZONTAL_1BIT">1-bit (SSD1306)</option>
-                        <option value="VERTICAL_1BIT">1-bit Vertical</option>
-                        <option value="HORIZONTAL_RGB565">RGB565 (TFT)</option>
-                        <option value="HORIZONTAL_ALPHA">Alpha Map</option>
-                        <option value="HORIZONTAL_RGB888_24">RGB24 (24-bit)</option>
-                        <option value="HORIZONTAL_RGB888_32">RGBA32 (32-bit)</option>
-                        <option value="HORIZONTAL_RGB332">RGB332 (8-bit)</option>
-                        <option value="HORIZONTAL_GRAY4">GRAY4 (4-bit)</option>
-                      </select>
-                    </label>
-                    
-                    <label className="flex flex-col gap-1">
-                      <span className="text-xs text-neutral-400">Output</span>
-                      <select 
-                        value={outputFormat} 
-                        onChange={(e) => setOutputFormat(e.target.value)} 
-                        className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-purple-500 transition-colors"
-                        aria-label="Select output format"
-                      >
-                        <option value="ARDUINO_CODE">Arduino Code</option>
-                        <option value="PLAIN_BYTES">Plain Bytes</option>
-                        <option value="ARDUINO_SINGLE_BITMAP">Single Bitmap</option>
-                        <option value="GFX_BITMAP_FONT">GFX Font</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  {/* Canvas Actions */}
-                  <div className="space-y-3">
-                    <h3 className="font-medium text-sm text-neutral-300">Actions</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button 
-                        onClick={clearCanvas} 
-                        className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs transition-colors"
-                        aria-label="Clear canvas"
-                      >
-                        Clear
-                      </button>
-                      <button 
-                        onClick={() => { 
-                          if (canUndo) {
-                            setRedo((r) => [data.map(p=>({...p})), ...r]); 
-                            const last = history[history.length - 1]; 
-                            setHistory((h) => h.slice(0, -1)); 
-                            setData(last.map(p => ({ ...p }))); 
-                          }
-                        }} 
-                        disabled={!canUndo} 
-                        className={`px-3 py-2 rounded-lg text-xs transition-colors ${
-                          canUndo 
-                            ? "bg-neutral-800 hover:bg-neutral-700" 
-                            : "bg-neutral-900 opacity-50 cursor-not-allowed"
-                        }`}
-                        aria-label="Undo last action"
-                      >
-                        Undo
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Canvas Options */}
-                  <div className="space-y-3">
-                    <h3 className="font-medium text-sm text-neutral-300">Options</h3>
-                    <div className="space-y-2">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          checked={mirrorX} 
-                          onChange={(e) => setMirrorX(e.target.checked)} 
-                          className="w-3 h-3 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
-                          aria-label="Mirror drawing horizontally"
-                        />
-                        <span className="text-xs">Mirror X</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          checked={mirrorY} 
-                          onChange={(e) => setMirrorY(e.target.checked)} 
-                          className="w-3 h-3 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
-                          aria-label="Mirror drawing vertically"
-                        />
-                        <span className="text-xs">Mirror Y</span>
-                      </label>
-                    </div>
-                  </div>
-
-                                     {/* Background */}
-                   <div className="space-y-3">
-                     <h3 className="font-medium text-sm text-neutral-300">Background</h3>
-                     <div className="grid grid-cols-2 gap-2">
-                       {["black", "white", "transparent"].map((bg) => (
-                         <label key={bg} className="flex items-center gap-2 cursor-pointer">
-                           <input 
-                             type="radio" 
-                             name="backgroundColor" 
-                             value={bg} 
-                             checked={backgroundColor === bg} 
-                             onChange={(e) => setBackgroundColor(e.target.value)} 
-                             className="w-3 h-3 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
-                             aria-label={`${bg} background`}
-                           />
-                           <span className="text-xs capitalize">{bg}</span>
-                         </label>
-                       ))}
-                     </div>
-                                           <div className="text-xs text-neutral-400 bg-neutral-800/50 p-2 rounded">
-                        <div className="font-medium mb-1">Background color fills transparent areas:</div>
-                        <div>• Black: Transparent areas become black pixels</div>
-                        <div>• White: Transparent areas become white pixels</div>
-                        <div>• Transparent: Keeps transparent areas (alpha = 0)</div>
-                      </div>
-                   </div>
-                </>
-              )}
-
-              {/* Collapsed Sidebar Icons */}
-              {sidebarCollapsed && (
-                <div className="space-y-4">
-                  <div className="flex flex-col gap-2">
-                    {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
-                      <button 
-                        key={k} 
-                        onClick={() => setTool(k)} 
-                        className={`p-2 rounded-lg text-xs font-medium transition-all ${
-                          tool === k 
-                            ? "bg-emerald-500 text-black shadow-lg" 
-                            : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
-                        }`}
-                        title={k.charAt(0).toUpperCase() + k.slice(1)}
-                        aria-label={`Select ${k} tool`}
-                      >
-                        {k === "pen" ? "🖊️" : k === "erase" ? "🧽" : k === "fill" ? "🪣" : "👁️"}
-                      </button>
-                    ))}
-                  </div>
-                  
-                  <div className="flex flex-col gap-2">
-                    <input 
-                      type="color" 
-                      value={rgbaToHex(primary)} 
-                      onChange={(e) => setPrimary(parseCssColor(e.target.value))} 
-                      className="w-8 h-8 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
-                      title="Primary color"
-                      aria-label="Primary color picker"
-                    />
-                    <input 
-                      type="color" 
-                      value={rgbaToHex(secondary)} 
-                      onChange={(e) => setSecondary(parseCssColor(e.target.value))} 
-                      className="w-8 h-8 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
-                      title="Secondary color"
-                      aria-label="Secondary color picker"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </aside>
+          {/* Sidebar */}
+          <Sidebar
+            sidebarCollapsed={sidebarCollapsed}
+            setSidebarCollapsed={setSidebarCollapsed}
+            tool={tool}
+            setTool={setTool}
+            primary={primary}
+            setPrimary={setPrimary}
+            secondary={secondary}
+            setSecondary={setSecondary}
+            swapColors={swapColors}
+            w={canvasState.w}
+            setW={canvasState.setW}
+            h={canvasState.h}
+            setH={canvasState.setH}
+            zoom={zoom}
+            setZoom={setZoom}
+            drawMode={drawMode}
+            setDrawMode={setDrawMode}
+            outputFormat={outputFormat}
+            setOutputFormat={setOutputFormat}
+            clearCanvas={canvasState.clearCanvas}
+            canUndo={canvasState.canUndo}
+            undo={canvasState.undo}
+            mirrorX={mirrorX}
+            setMirrorX={setMirrorX}
+            mirrorY={mirrorY}
+            setMirrorY={setMirrorY}
+            backgroundColor={backgroundColor}
+            setBackgroundColor={setBackgroundColor}
+          />
 
           {/* Main Content Area */}
           <main className="flex-1 min-w-0 flex flex-col">
-            {/* Simplified Tab Navigation */}
+            {/* Tab Navigation */}
             <nav className="flex items-center gap-2 border-b border-neutral-800 px-4 py-3 bg-neutral-900/50">
               {(["Editor", "Snippets", "Tests"]).map((tab) => (
                 <button
@@ -1518,274 +350,38 @@ const GFXfont ${safeName} PROGMEM = {
 
             <div className="flex-1 min-h-0 p-4 overflow-auto">
               {activeTab === 'Editor' && (
-                <div className="space-y-4">
-                  {/* Canvas Container */}
-                  <div className="bg-neutral-900 rounded-2xl p-4 overflow-auto inline-block shadow-xl border border-neutral-700">
-                                         <PixelCanvas
-                       width={w}
-                       height={h}
-                       zoom={zoom}
-                       pixels={data}
-                       backgroundColor={backgroundColor}
-                       cursor={tool === "eyedropper" ? "crosshair" : "pointer"}
-                       onPointerDown={handleMouseDown}
-                       onPointerMove={handleMouseMove}
-                       onPointerUp={handleMouseUp}
-                     />
-                  </div>
-                  
-                  {/* Canvas Info */}
-                  <div className="bg-neutral-900/50 rounded-xl p-4 border border-neutral-700">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                      <div className="text-center">
-                        <div className="text-neutral-400">Canvas Size</div>
-                        <div className="font-mono text-white">{w} × {h} px</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-neutral-400">Zoom Level</div>
-                        <div className="font-mono text-white">{zoom}×</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-neutral-400">Active Tool</div>
-                        <div className="font-medium text-emerald-400 capitalize">{tool}</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-neutral-400">Draw Mode</div>
-                        <div className="font-mono text-blue-400 text-xs">{drawMode}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Keyboard Shortcuts Help */}
-                  <div className="bg-neutral-900/50 rounded-xl p-4 border border-neutral-700">
-                    <h3 className="font-medium text-sm mb-3">Keyboard Shortcuts</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-                      <div className="space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">B:</span>
-                          <span className="font-mono text-white">Brush</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">E:</span>
-                          <span className="font-mono text-white">Erase</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">F:</span>
-                          <span className="font-mono text-white">Fill</span>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">I:</span>
-                          <span className="font-mono text-white">Eyedropper</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">C:</span>
-                          <span className="font-mono text-white">Clear</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">X:</span>
-                          <span className="font-mono text-white">Swap Colors</span>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">Ctrl+Z:</span>
-                          <span className="font-mono text-white">Undo</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">Ctrl+Y:</span>
-                          <span className="font-mono text-white">Redo</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">Ctrl++:</span>
-                          <span className="font-mono text-white">Zoom In</span>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">Ctrl+-:</span>
-                          <span className="font-mono text-white">Zoom Out</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">Ctrl+0:</span>
-                          <span className="font-mono text-white">Reset Zoom</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-neutral-400">RMB:</span>
-                          <span className="font-mono text-white">Secondary Color</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <EditorTab
+                  w={canvasState.w}
+                  h={canvasState.h}
+                  zoom={zoom}
+                  data={canvasState.data}
+                  backgroundColor={backgroundColor}
+                  tool={tool}
+                  drawMode={drawMode}
+                  handleMouseDown={handleMouseDown}
+                  handleMouseMove={handleMouseMove}
+                  handleMouseUp={handleMouseUp}
+                />
               )}
 
               {activeTab === 'Snippets' && (
-                <div className="space-y-3">
-                  <div className="bg-neutral-900 rounded-2xl p-4 space-y-3">
-                    <h2 className="font-medium">Arduino usage snippets</h2>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// 1-bit (SSD1306 OLED)
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
-
-void setup(){
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.drawBitmap(0, 0, ${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bits, ${w}, ${h}, 1);
-  display.display();
-}
-
-void loop(){}`}</pre>
-
-                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// RGB565 (ST7735/ILI9341 TFT)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7735.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-#define TFT_CS   10
-#define TFT_RST  9  
-#define TFT_DC   8
-
-Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
-
-void setup(){
-  tft.initR(INITR_BLACKTAB);
-  tft.fillScreen(ST77XX_BLACK);
-  drawImage(0, 0);
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  tft.startWrite();
-  tft.setAddrWindow(x0, y0, ${w}, ${h});
-  for (uint16_t i = 0; i < ${w} * ${h}; i++) {
-    uint16_t color = pgm_read_word(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[i]);
-    tft.writePixel(color);
-  }
-  tft.endWrite();
-}
-
-void loop(){}`}</pre>
-
-                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// RGB24 (ESP32/High Memory)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-Adafruit_ILI9341 tft = Adafruit_ILI9341(10, 8, 9);
-
-void setup(){
-  tft.begin();
-  tft.fillScreen(ILI9341_BLACK);
-  drawImage(0, 0);
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  for (uint16_t y = 0; y < ${h}; y++) {
-    for (uint16_t x = 0; x < ${w}; x++) {
-      uint16_t index = (y * ${w} + x) * 3;
-      uint8_t r = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[index]);
-      uint8_t g = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[index + 1]);
-      uint8_t b = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[index + 2]);
-      uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-      tft.drawPixel(x0 + x, y0 + y, color);
-    }
-  }
-}
-
-void loop(){}`}</pre>
-
-                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// RGB332 (SSD1331/Low Memory)
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1331.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-Adafruit_SSD1331 display = Adafruit_SSD1331(10, 8, 9);
-
-void setup(){
-  display.begin();
-  display.fillScreen(0x00);
-  drawImage(0, 0);
-}
-
-void drawImage(int16_t x0, int16_t y0) {
-  for (uint16_t y = 0; y < ${h}; y++) {
-    for (uint16_t x = 0; x < ${w}; x++) {
-      uint8_t color332 = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[y * ${w} + x]);
-      display.drawPixel(x0 + x, y0 + y, color332);
-    }
-  }
-}
-
-// RGB332: RRRGGGBB (8-bit color)
-void loop(){}`}</pre>
-
-                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// 4-bit Grayscale (E-ink/EPD)
-#include <Adafruit_GFX.h>
-#include <Adafruit_EPD.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-// Adafruit_IL0373 display(152, 152, 8, 9, 10, 11, 7);
-
-void setup(){
-  // display.begin();
-  // display.clearBuffer();
-  drawGrayImage(0, 0);
-  // display.display();
-}
-
-void drawGrayImage(int16_t x0, int16_t y0) {
-  for (uint16_t y = 0; y < ${h}; y++) {
-    for (uint16_t x = 0; x < ${w}; x++) {
-      uint16_t byteIndex = (y * ${w} + x) / 2;
-      uint8_t packedByte = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[byteIndex]);
-      uint8_t grayValue = (x % 2 == 0) ? (packedByte >> 4) : (packedByte & 0x0F);
-      uint8_t gray8 = grayValue * 17;
-      // display.drawPixel(x0 + x, y0 + y, gray8);
-    }
-  }
-}
-
-// 4-bit grayscale: 2 pixels per byte
-void loop(){}`}</pre>
-                    </div>
-                  </div>
-                </div>
+                <SnippetsTab
+                  name={name}
+                  w={canvasState.w}
+                  h={canvasState.h}
+                />
               )}
 
               {activeTab === 'Tests' && (
-                <div className="bg-neutral-900 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h2 className="font-medium">Built-in Tests</h2>
-                    <button onClick={runTests} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Run Tests</button>
-                  </div>
-                  {testResults.length > 0 && (
-                    <div className="space-y-2 text-sm">
-                      {testResults.map((t, i) => (
-                        <div key={i} className={`${t.pass ? 'bg-emerald-900/30 text-emerald-300' : 'bg-rose-900/30 text-rose-300'} p-2 rounded-xl`}>
-                          <div className="font-medium">{t.pass ? 'PASS' : 'FAIL'} — {t.name}</div>
-                          {!t.pass && (
-                            <div className="opacity-70 font-mono">
-                              got: {JSON.stringify(t.got)}; expected: {JSON.stringify(t.expect)}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      <div className={`${testsPassed ? 'bg-emerald-800/30 text-emerald-200' : 'bg-rose-800/30 text-rose-200'} p-2 rounded-xl`}>
-                        Overall: {testsPassed ? '✅ All tests passed' : '❌ Some tests failed'}
-                      </div>
-                    </div>
-                  )}
-                  {testResults.length === 0 && (
-                    <div className="text-xs opacity-70">Click "Run Tests" to validate 1‑bit, RGB565, RGB24, RGB332, and 4‑bit grayscale format conversions.</div>
-                  )}
-                </div>
+                <TestsTab
+                  testResults={tests.testResults}
+                  runTests={tests.runTests}
+                  testsPassed={tests.testsPassed}
+                />
               )}
             </div>
+
+            {/* Footer */}
             <footer className="text-xs opacity-60 text-center py-3 border-t border-neutral-800 bg-neutral-900/50">
               <div className="flex items-center justify-center gap-4">
                 <span>Made for makers. No tracking, all local. ✨</span>
@@ -1797,62 +393,15 @@ void loop(){}`}</pre>
             </footer>
           </main>
         </div>
+
         {/* Code Modal */}
-        {showCodeModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-60 modal-backdrop flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-            <div className="bg-neutral-900 rounded-2xl p-6 max-w-5xl w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border border-neutral-700">
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 id="modal-title" className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
-                    Generated C++ Code
-                  </h2>
-                  <p className="text-sm text-neutral-400 mt-1">
-                    Ready to use in your Arduino project
-                  </p>
-                </div>
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleCopyCode}
-                    className={`px-6 py-3 rounded-xl text-sm font-medium transition-all ${
-                      copyStatus === "copied" 
-                        ? "bg-green-500 text-white shadow-lg" 
-                        : copyStatus === "error"
-                        ? "bg-red-500 text-white shadow-lg"
-                        : "bg-blue-500 text-white hover:bg-blue-600 shadow-lg hover:shadow-xl"
-                    }`}
-                    aria-label="Copy generated code to clipboard"
-                  >
-                    {copyStatus === "copied" ? "✓ Copied!" : copyStatus === "error" ? "✗ Error!" : "📋 Copy Code"}
-                  </button>
-                  <button
-                    onClick={() => setShowCodeModal(false)}
-                    className="px-6 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm transition-colors"
-                    aria-label="Close code modal"
-                  >
-                    ✕ Close
-                  </button>
-                </div>
-              </div>
-              <div className="flex-1 overflow-auto">
-                <pre className="bg-neutral-950 rounded-xl p-6 overflow-auto text-sm whitespace-pre-wrap border border-neutral-700 shadow-inner">
-                  {(() => {
-                    try {
-                      const code = generateCppCode();
-                      console.log('Generated code length:', code.length);
-                      return code || '// No code generated - please check console for errors';
-                    } catch (error) {
-                      console.error('Error generating code:', error);
-                      return `// Error generating code: ${error.message}\n// Please check console for details`;
-                    }
-                  })()}
-                </pre>
-              </div>
-              <div className="mt-4 text-xs text-neutral-500 text-center">
-                Generated by Pixel2CPP • Made by <a href="https://coderandom.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">CodeRandom</a>
-              </div>
-            </div>
-          </div>
-        )}
+        <CodeModal
+          showCodeModal={codeGeneration.showCodeModal}
+          setShowCodeModal={codeGeneration.setShowCodeModal}
+          handleCopyCode={handleCopyCode}
+          copyStatus={codeGeneration.copyStatus}
+          generateCppCode={generateCppCode}
+        />
       </div>
     </div>
   );
