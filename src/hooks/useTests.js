@@ -27,7 +27,7 @@ export function useTests() {
     {
       const tw = 8, th = 1;
       const px = [];
-      for (let i = 0; i < 8; i++) px.push((i % 2 === 0) ? black() : white()); // 1,0,1,0,... (black=1)
+      for (let i = 0; i < 8; i++) px.push((i % 2 === 0) ? white() : black()); // 1,0,1,0,... (white=1)
       const bytes = pack1bit(px, tw, th, 'horizontal');
       const expect = [0xAA];
       results.push({ name: "1BIT Horizontal 8px 10101010", pass: JSON.stringify(bytes) === JSON.stringify(expect), got: bytes, expect });
@@ -36,7 +36,7 @@ export function useTests() {
     // Test 2: 1-bit horizontal width 10, row of all ones → [0xFF, 0xC0]
     {
       const tw = 10, th = 1;
-      const px = Array.from({ length: tw * th }, () => black());
+      const px = Array.from({ length: tw * th }, () => white());
       const bytes = pack1bit(px, tw, th, 'horizontal');
       const expect = [0xFF, 0xC0];
       results.push({ name: "1BIT Horizontal 10px row all 1s", pass: JSON.stringify(bytes) === JSON.stringify(expect), got: bytes, expect });
@@ -46,7 +46,7 @@ export function useTests() {
     {
       const tw = 1, th = 8;
       const px = [];
-      for (let i = 0; i < 8; i++) px.push((i % 2 === 0) ? black() : white()); // 1,0,1,0,... (black=1)
+      for (let i = 0; i < 8; i++) px.push((i % 2 === 0) ? white() : black()); // 1,0,1,0,... (white=1)
       const bytes = pack1bit(px, tw, th, 'vertical');
       const expect = [0xAA]; // Same pattern but vertical
       results.push({ name: "1BIT Vertical 1x8 10101010", pass: JSON.stringify(bytes) === JSON.stringify(expect), got: bytes, expect });

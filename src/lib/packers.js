@@ -87,8 +87,8 @@ export function pack1bitAlpha(pixels, width, height, orientation = 'horizontal')
     for (let x = 0; x < width; x++) {
       for (let yPage = 0; yPage < Math.ceil(height / 8); yPage++) {
         let cur = 0;
-        for (let bit = 0; bit < 8; bit++) {
-          const y = yPage * 8 + bit;
+        for (let bit = 7; bit >= 0; bit--) {
+          const y = yPage * 8 + (7 - bit);
           if (y < height) {
             const p = pixels[I(x, y)];
             const hasAlpha = p.a > 127; // alpha threshold (opaque = on)
