@@ -1601,37 +1601,7 @@ const GFXfont ${safeName} PROGMEM = {
             <div className="flex-1 min-h-0 p-4 overflow-auto">
               {activeTab === 'Editor' && (
                 <div className="space-y-4">
-                  {/* Welcome message for new users */}
-                  {data.every(p => p.a === 0) && (
-                    <div className="bg-gradient-to-r from-blue-900/30 to-purple-900/30 border border-blue-500/30 rounded-2xl p-6">
-                      <div className="flex items-start gap-4">
-                        <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                          <span className="text-white font-bold text-lg">🎨</span>
-                        </div>
-                        <div className="flex-1">
-                          <h3 className="text-lg font-semibold text-white mb-2">Welcome to Pixel2CPP!</h3>
-                          <p className="text-neutral-300 mb-4">
-                            Create pixel art and export Arduino-ready C++ code instantly. Perfect for embedded displays, 
-                            OLED screens, and microcontroller projects.
-                          </p>
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                            <div className="flex items-center gap-2">
-                              <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-                              <span>Draw with left-click, erase with right-click</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
-                              <span>Use tools: Pen, Erase, Fill, Eyedropper</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
-                              <span>Export code for Arduino, ESP32, and more</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+
                   
                   {/* Canvas Container */}
                   <div className="bg-neutral-900 rounded-2xl p-4 overflow-auto inline-block shadow-xl border border-neutral-700">
