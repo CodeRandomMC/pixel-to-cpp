@@ -10,24 +10,84 @@ export function hex565(v) {
   return "0x" + v.toString(16).toUpperCase().padStart(4, "0");
 }
 
-export function pack1bit(pixels, width, height) {
+export function pack1bit(pixels, width, height, orientation = 'horizontal') {
   const bytes = [];
   const I = (x, y) => y * width + x;
-  for (let y = 0; y < height; y++) {
-    let bit = 7;
-    let cur = 0;
+  
+  if (orientation === 'horizontal') {
+    // Original horizontal packing (row by row)
+    for (let y = 0; y < height; y++) {
+      let bit = 7;
+      let cur = 0;
+      for (let x = 0; x < width; x++) {
+        const p = pixels[I(x, y)];
+        const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1
+        if (on) cur |= 1 << bit;
+        bit--;
+        if (bit < 0) {
+          bytes.push(cur);
+          cur = 0;
+          bit = 7;
+        }
+      }
+      if (bit !== 7) bytes.push(cur); // flush partial byte per row
+    }
+  } else if (orientation === 'vertical') {
+    // Vertical packing (column by column, 8 vertical pixels per byte)
     for (let x = 0; x < width; x++) {
-      const p = pixels[I(x, y)];
-      const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1
-      if (on) cur |= 1 << bit;
-      bit--;
-      if (bit < 0) {
+      for (let yPage = 0; yPage < Math.ceil(height / 8); yPage++) {
+        let cur = 0;
+        for (let bit = 0; bit < 8; bit++) {
+          const y = yPage * 8 + bit;
+          if (y < height) {
+            const p = pixels[I(x, y)];
+            const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2;
+            if (on) cur |= 1 << bit;
+          }
+        }
         bytes.push(cur);
-        cur = 0;
-        bit = 7;
       }
     }
-    if (bit !== 7) bytes.push(cur); // flush partial byte per row
+  }
+  return bytes;
+}
+
+export function pack1bitAlpha(pixels, width, height, orientation = 'horizontal') {
+  const bytes = [];
+  const I = (x, y) => y * width + x;
+  
+  if (orientation === 'horizontal') {
+    for (let y = 0; y < height; y++) {
+      let bit = 7;
+      let cur = 0;
+      for (let x = 0; x < width; x++) {
+        const p = pixels[I(x, y)];
+        const hasAlpha = p.a > 127; // alpha threshold
+        if (hasAlpha) cur |= 1 << bit;
+        bit--;
+        if (bit < 0) {
+          bytes.push(cur);
+          cur = 0;
+          bit = 7;
+        }
+      }
+      if (bit !== 7) bytes.push(cur);
+    }
+  } else {
+    for (let x = 0; x < width; x++) {
+      for (let yPage = 0; yPage < Math.ceil(height / 8); yPage++) {
+        let cur = 0;
+        for (let bit = 0; bit < 8; bit++) {
+          const y = yPage * 8 + bit;
+          if (y < height) {
+            const p = pixels[I(x, y)];
+            const hasAlpha = p.a > 127;
+            if (hasAlpha) cur |= 1 << bit;
+          }
+        }
+        bytes.push(cur);
+      }
+    }
   }
   return bytes;
 }
