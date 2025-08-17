@@ -7,6 +7,10 @@ export default function PixelCanvas({
   zoom,
   pixels,
   showGrid,
+  gridSize = 1,
+  gridLineWidth = 0.5,
+  gridOpacity = 0.3,
+  gridOffset = { x: 0, y: 0 },
   cursor,
   onPointerDown,
   onPointerMove,
@@ -59,31 +63,63 @@ export default function PixelCanvas({
     ctx.putImageData(imageData, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
-    // Draw grid in logical pixels (will scale with CSS)
+    // Draw grid to clearly show individual pixels
     if (showGrid) {
-      ctx.strokeStyle = "rgba(255,255,255,0.06)";
-      ctx.lineWidth = 1;
-      for (let x = 1; x < width; x++) {
-        ctx.beginPath();
-        ctx.moveTo(x + 0.5, 0);
-        ctx.lineTo(x + 0.5, height);
-        ctx.stroke();
+      // Use a more visible grid with better contrast
+      ctx.strokeStyle = `rgba(255,255,255,${Math.max(gridOpacity, 0.3)})`;
+      ctx.lineWidth = Math.max(gridLineWidth, 0.5); // Make lines more visible
+      
+      if (gridSize === 1) {
+        // Standard pixel grid - draw lines to clearly separate each pixel
+        // Draw vertical lines at pixel boundaries
+        for (let x = 0; x <= width; x++) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+          ctx.stroke();
+        }
+        
+        // Draw horizontal lines at pixel boundaries
+        for (let y = 0; y <= height; y++) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+          ctx.stroke();
+        }
+      } else {
+        // Section grid - draw lines at section boundaries
+        for (let x = 0; x <= width; x += gridSize) {
+          const xPos = x + gridOffset.x;
+          if (xPos >= 0 && xPos <= width) {
+            ctx.beginPath();
+            ctx.moveTo(xPos, 0);
+            ctx.lineTo(xPos, height);
+            ctx.stroke();
+          }
+        }
+        
+        for (let y = 0; y <= height; y += gridSize) {
+          const yPos = y + gridOffset.y;
+          if (yPos >= 0 && yPos <= height) {
+            ctx.beginPath();
+            ctx.moveTo(0, yPos);
+            ctx.lineTo(width, yPos);
+            ctx.stroke();
+          }
+        }
       }
-      for (let y = 1; y < height; y++) {
-        ctx.beginPath();
-        ctx.moveTo(0, y + 0.5);
-        ctx.lineTo(width, y + 0.5);
-        ctx.stroke();
-      }
-      ctx.strokeStyle = "rgba(255,255,255,0.08)";
-      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+      
+      // Draw border around the entire canvas
+      ctx.strokeStyle = `rgba(255,255,255,${Math.min(gridOpacity * 1.5, 0.4)})`;
+      ctx.lineWidth = Math.max(gridLineWidth * 1.5, 0.75); // Slightly thicker border
+      ctx.strokeRect(0, 0, width, height);
     } else {
-      const prev = ctx.strokeStyle;
+      // Draw only the border when grid is disabled
       ctx.strokeStyle = "rgba(255,255,255,0.08)";
-      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
-      ctx.strokeStyle = prev;
+      ctx.lineWidth = 0.05;
+      ctx.strokeRect(0, 0, width, height);
     }
-  }, [pixels, width, height, zoom, showGrid]);
+  }, [pixels, width, height, zoom, showGrid, gridSize, gridLineWidth, gridOpacity, gridOffset]);
 
   // Also ensure the canvas style updates are applied correctly
   useEffect(() => {

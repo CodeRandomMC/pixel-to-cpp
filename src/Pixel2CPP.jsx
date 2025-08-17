@@ -14,6 +14,10 @@ export default function Pixel2CPP() {
   const [h, setH] = useState(64);
   const [zoom, setZoom] = useState(8); // pixel size in CSS px
   const [showGrid, setShowGrid] = useState(true);
+  const [gridSize, setGridSize] = useState(1); // Grid spacing (every N pixels)
+  const [gridLineWidth, setGridLineWidth] = useState(1); // Grid line thickness
+  const [gridOpacity, setGridOpacity] = useState(0.15); // Grid opacity
+  const [gridOffset, setGridOffset] = useState({ x: 0, y: 0 }); // Grid offset
   const [mirrorX, setMirrorX] = useState(false);
   const [mirrorY, setMirrorY] = useState(false);
   const [tool, setTool] = useState("pen"); // pen | erase | fill | eyedropper
@@ -1012,6 +1016,109 @@ const GFXfont ${safeName} PROGMEM = {
                   <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorX} onChange={(e) => setMirrorX(e.target.checked)} />Mirror X</label>
                   <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorY} onChange={(e) => setMirrorY(e.target.checked)} />Mirror Y</label>
                 </div>
+                
+                {/* Grid customization controls */}
+                {showGrid && (
+                  <div className="space-y-2 w-full border-t border-neutral-700 pt-2">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-medium text-neutral-300">Grid Settings</label>
+                      <button 
+                        onClick={() => {
+                          setGridSize(1);
+                          setGridLineWidth(1);
+                          setGridOpacity(0.15);
+                          setGridOffset({ x: 0, y: 0 });
+                        }}
+                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
+                        title="Reset grid settings to defaults"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <label className="flex items-center gap-1">
+                        Spacing
+                        <input 
+                          type="number" 
+                          min={1} 
+                          max={16} 
+                          value={gridSize} 
+                          onChange={(e) => setGridSize(clamp(parseInt(e.target.value) || 1, 1, 16))} 
+                          className="w-12 bg-neutral-800 rounded px-1 py-0.5 text-xs" 
+                          title="Grid line spacing (pixels between lines)"
+                        />
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <label className="flex items-center gap-1">
+                          Opacity
+                          <input 
+                            type="range" 
+                            min={0.01} 
+                            max={0.3} 
+                            step={0.01} 
+                            value={gridOpacity} 
+                            onChange={(e) => setGridOpacity(parseFloat(e.target.value))} 
+                            className="w-16" 
+                            title="Grid line opacity"
+                          />
+                        </label>
+                        <span className="text-xs text-neutral-400">{(gridOpacity * 100).toFixed(0)}%</span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                      <label className="flex items-center gap-1">
+                        Offset X
+                        <input 
+                          type="number" 
+                          min={-16} 
+                          max={16} 
+                          value={gridOffset.x} 
+                          onChange={(e) => setGridOffset(prev => ({ ...prev, x: clamp(parseInt(e.target.value) || 0, -16, 16) }))} 
+                          className="w-12 bg-neutral-800 rounded px-1 py-0.5 text-xs" 
+                          title="Horizontal grid offset"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Offset Y
+                        <input 
+                          type="number" 
+                          min={-16} 
+                          max={16} 
+                          value={gridOffset.y} 
+                          onChange={(e) => setGridOffset(prev => ({ ...prev, y: clamp(parseInt(e.target.value) || 0, -16, 16) }))} 
+                          className="w-12 bg-neutral-800 rounded px-1 py-0.5 text-xs" 
+                          title="Vertical grid offset"
+                        />
+                      </label>
+                    </div>
+                    <div className="flex gap-1 flex-wrap">
+                      <button 
+                        onClick={() => { setGridSize(1); setGridOpacity(0.15); }}
+                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
+                        title="Standard 1x1 pixel grid"
+                      >
+                        1x1
+                      </button>
+                      <button 
+                        onClick={() => { setGridSize(8); setGridOpacity(0.25); }}
+                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
+                        title="8x8 pixel grid (common for 8-bit sprites)"
+                      >
+                        8x8
+                      </button>
+                      <button 
+                        onClick={() => { setGridSize(16); setGridOpacity(0.3); }}
+                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
+                        title="16x16 pixel grid (common for tiles)"
+                      >
+                        16x16
+                      </button>
+                    </div>
+                    <div className="text-xs text-neutral-500">
+                      Tip: Use spacing &gt; 1 to create grid sections. Offsets shift the grid position.
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-2 w-full">
                   <label className="block text-sm font-medium">Draw mode:</label>
                   <select value={drawMode} onChange={(e) => setDrawMode(e.target.value)} className="w-full bg-neutral-800 rounded px-2 py-1 text-sm">
@@ -1083,6 +1190,10 @@ const GFXfont ${safeName} PROGMEM = {
                     zoom={zoom}
                     pixels={data}
                     showGrid={showGrid}
+                    gridSize={gridSize}
+                    gridLineWidth={gridLineWidth}
+                    gridOpacity={gridOpacity}
+                    gridOffset={gridOffset}
                     cursor={tool === "eyedropper" ? "crosshair" : "pointer"}
                     onPointerDown={handleMouseDown}
                     onPointerMove={handleMouseMove}
