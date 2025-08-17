@@ -31,7 +31,7 @@ export function pack1bit(pixels, width, height, orientation = 'horizontal') {
       let cur = 0;
       for (let x = 0; x < width; x++) {
         const p = pixels[I(x, y)];
-        const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1 (white = on)
+        const on = (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1 (white = on)
         if (on) cur |= 1 << bit;
         bit--;
         if (bit < 0) {
@@ -51,7 +51,7 @@ export function pack1bit(pixels, width, height, orientation = 'horizontal') {
           const y = yPage * 8 + (7 - bit);
           if (y < height) {
             const p = pixels[I(x, y)];
-            const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1 (white = on)
+            const on = (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1 (white = on)
             if (on) cur |= 1 << bit;
           }
         }
@@ -91,7 +91,7 @@ export function pack1bitAlpha(pixels, width, height, orientation = 'horizontal')
           const y = yPage * 8 + bit;
           if (y < height) {
             const p = pixels[I(x, y)];
-            const hasAlpha = p.a > 127;
+            const hasAlpha = p.a > 127; // alpha threshold (opaque = on)
             if (hasAlpha) cur |= 1 << bit;
           }
         }
@@ -108,7 +108,7 @@ export function packRGB565(pixels, width, height) {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = pixels[I(x, y)];
-      out.push(p.a < 10 ? 0 : rgbTo565(p.r, p.g, p.b));
+      out.push(rgbTo565(p.r, p.g, p.b));
     }
   }
   return out;
@@ -120,11 +120,7 @@ export function packRGB24(pixels, width, height) {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = pixels[I(x, y)];
-      if (p.a < 10) {
-        out.push(0, 0, 0);
-      } else {
-        out.push(p.r, p.g, p.b);
-      }
+      out.push(p.r, p.g, p.b);
     }
   }
   return out;
@@ -143,7 +139,7 @@ export function packRGB332(pixels, width, height) {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = pixels[I(x, y)];
-      out.push(p.a < 10 ? 0 : rgbTo332(p.r, p.g, p.b));
+      out.push(rgbTo332(p.r, p.g, p.b));
     }
   }
   return out;
@@ -157,7 +153,7 @@ export function packGray4(pixels, width, height) {
     let cur = 0;
     for (let x = 0; x < width; x++) {
       const p = pixels[I(x, y)];
-      const luma = p.a < 10 ? 0 : Math.floor((0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b) / 16);
+      const luma = Math.floor((0.2126 * p.r + 0.7152 * p.g + 0.0722 * p.b) / 16);
       const gray4 = Math.min(15, Math.max(0, luma)); // 0-15 range
       
       if (nibble === 1) {
