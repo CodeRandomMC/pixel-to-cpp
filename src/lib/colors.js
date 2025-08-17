@@ -1,3 +1,13 @@
+/*
+ * Pixel2CPP - Color Utilities
+ * 
+ * MIT License
+ * Copyright (c) 2025 CodeRandom
+ * 
+ * This software is provided free of charge for educational and personal use.
+ * Commercial use and redistribution must comply with the MIT License terms.
+ */
+
 // Color helpers
 export const clamp = (n, min = 0, max = 255) => Math.max(min, Math.min(max, n));
 export const transparent = () => ({ r: 0, g: 0, b: 0, a: 0 });

@@ -1,3 +1,13 @@
+/*
+ * Pixel2CPP - Input/Output Utilities
+ * 
+ * MIT License
+ * Copyright (c) 2025 CodeRandom
+ * 
+ * This software is provided free of charge for educational and personal use.
+ * Commercial use and redistribution must comply with the MIT License terms.
+ */
+
 // Download and clipboard utilities
 export function download(filename, text) {
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });

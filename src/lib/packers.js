@@ -1,3 +1,13 @@
+/*
+ * Pixel2CPP - Image Packing Utilities
+ * 
+ * MIT License
+ * Copyright (c) 2025 CodeRandom
+ * 
+ * This software is provided free of charge for educational and personal use.
+ * Commercial use and redistribution must comply with the MIT License terms.
+ */
+
 // Image packing utilities and conversions
 export function rgbTo565(r, g, b) {
   const R = (r >> 3) & 0x1f;
@@ -21,7 +31,7 @@ export function pack1bit(pixels, width, height, orientation = 'horizontal') {
       let cur = 0;
       for (let x = 0; x < width; x++) {
         const p = pixels[I(x, y)];
-        const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1
+        const on = p.a > 0 && (p.r + p.g + p.b) < (255 * 3) / 2; // darker pixel → 1
         if (on) cur |= 1 << bit;
         bit--;
         if (bit < 0) {
@@ -37,11 +47,11 @@ export function pack1bit(pixels, width, height, orientation = 'horizontal') {
     for (let x = 0; x < width; x++) {
       for (let yPage = 0; yPage < Math.ceil(height / 8); yPage++) {
         let cur = 0;
-        for (let bit = 0; bit < 8; bit++) {
-          const y = yPage * 8 + bit;
+        for (let bit = 7; bit >= 0; bit--) {
+          const y = yPage * 8 + (7 - bit);
           if (y < height) {
             const p = pixels[I(x, y)];
-            const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2;
+            const on = p.a > 0 && (p.r + p.g + p.b) < (255 * 3) / 2;
             if (on) cur |= 1 << bit;
           }
         }

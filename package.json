@@ -1,8 +1,16 @@
 {
   "name": "pixel-to-cpp",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.2.0",
   "type": "module",
+  "description": "Create pixel art and export Arduino-ready C++ code instantly",
+  "author": "CodeRandom",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CodeRandomMC/pixel-to-cpp.git"
+  },
+  "homepage": "https://coderandom.com/pixel-to-cpp",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

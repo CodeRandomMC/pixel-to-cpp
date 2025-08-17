@@ -1,3 +1,31 @@
+/*
+ * Pixel2CPP - Create pixel art and export Arduino-ready C++ code instantly
+ * 
+ * MIT License
+ * Copyright (c) 2025 CodeRandom
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ * 
+ * This software is provided free of charge for educational and personal use.
+ * Commercial use and redistribution must comply with the MIT License terms.
+ */
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import PixelCanvas from "./components/PixelCanvas.jsx";
 import { clamp, transparent, black, white, rgbaEq, rgbaToHex, parseCssColor } from "./lib/colors.js";
@@ -13,23 +41,21 @@ export default function Pixel2CPP() {
   const [w, setW] = useState(64);
   const [h, setH] = useState(64);
   const [zoom, setZoom] = useState(8); // pixel size in CSS px
-  const [showGrid, setShowGrid] = useState(true);
-  const [gridSize, setGridSize] = useState(1); // Grid spacing (every N pixels)
-  const [gridLineWidth, setGridLineWidth] = useState(1); // Grid line thickness
-  const [gridOpacity, setGridOpacity] = useState(0.15); // Grid opacity
-  const [gridOffset, setGridOffset] = useState({ x: 0, y: 0 }); // Grid offset
   const [mirrorX, setMirrorX] = useState(false);
   const [mirrorY, setMirrorY] = useState(false);
   const [tool, setTool] = useState("pen"); // pen | erase | fill | eyedropper
   const [primary, setPrimary] = useState(black());
   const [secondary, setSecondary] = useState(white());
   const [name, setName] = useState("sprite");
+  const [backgroundColor, setBackgroundColor] = useState("black"); // black, white, transparent, custom
+  const [customBackgroundColor, setCustomBackgroundColor] = useState("#000000");
 
   // UI state
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [copyStatus, setCopyStatus] = useState(""); // "", "copied", "error"
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState("Editor"); // Editor | Snippets | Tests
+  const [sidebarTab, setSidebarTab] = useState("settings"); // settings | tools
 
   // Pixel buffer
   const [data, setData] = useState(() => Array.from({ length: w * h }, () => transparent()));
@@ -957,248 +983,693 @@ const GFXfont ${safeName} PROGMEM = {
 
   const testsPassed = useMemo(() => testResults.every((t) => t.pass), [testResults]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Don't trigger shortcuts when typing in input fields
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+        return;
+      }
+
+      // Ctrl+Z: Undo
+      if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        if (canUndo) {
+          setRedo((r) => [data.map(p=>({...p})), ...r]); 
+          const last = history[history.length - 1]; 
+          setHistory((h) => h.slice(0, -1)); 
+          setData(last.map(p => ({ ...p }))); 
+        }
+      }
+
+      // Ctrl+Y or Ctrl+Shift+Z: Redo
+      if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) {
+        e.preventDefault();
+        if (canRedo) {
+          const [next, ...rest] = redo; 
+          setHistory((h) => [...h, data.map(p=>({...p}))]); 
+          setData(next.map(p => ({ ...p }))); 
+          setRedo(rest); 
+        }
+      }
+
+      // Tool shortcuts
+      if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
+        switch (e.key.toLowerCase()) {
+          case 'b': // Brush/Pen tool
+            e.preventDefault();
+            setTool("pen");
+            break;
+          case 'e': // Erase tool
+            e.preventDefault();
+            setTool("erase");
+            break;
+          case 'f': // Fill tool
+            e.preventDefault();
+            setTool("fill");
+            break;
+          case 'i': // Eyedropper tool
+            e.preventDefault();
+            setTool("eyedropper");
+            break;
+          case 'c': // Clear canvas
+            e.preventDefault();
+            clearCanvas();
+            break;
+          case 'x': // Swap colors
+            e.preventDefault();
+            swapColors();
+            break;
+        }
+      }
+
+      // Zoom shortcuts
+      if (e.ctrlKey && !e.altKey && !e.shiftKey) {
+        switch (e.key) {
+          case '=':
+          case '+':
+            e.preventDefault();
+            setZoom(prev => Math.min(32, prev + 1));
+            break;
+          case '-':
+            e.preventDefault();
+            setZoom(prev => Math.max(4, prev - 1));
+            break;
+          case '0':
+            e.preventDefault();
+            setZoom(8);
+            break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [canUndo, canRedo, data, history, redo]);
+
   // ---------- UI ----------
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
       <div className="flex flex-col h-screen">
-        <header className="flex items-center justify-between gap-4 px-3 sm:px-4 py-3 border-b border-neutral-800">
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Pixel2CPP — Pixel Editor → C++ Export</h1>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <input 
-              className="bg-neutral-800 rounded px-3 py-1 outline-none text-sm" 
-              value={name} 
-              onChange={(e) => setName(e.target.value)} 
-              title="Asset name" 
-              placeholder="Asset name"
-            />
-            <label className="px-3 py-1.5 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 cursor-pointer text-sm">
-              Upload Image
-              <input 
-                type="file" 
-                accept="image/*" 
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) importImage(f); }} 
-                className="hidden"
-              />
-            </label>
-            <button 
-              onClick={handleGenerateCode} 
-              disabled={isGenerating}
-              className="px-3 py-1.5 rounded-xl bg-blue-500 text-white font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-            >
-              {isGenerating ? "Generating..." : "Generate Code"}
-            </button>
-            <button 
-              onClick={exportCpp} 
-              className="px-3 py-1.5 rounded-xl bg-emerald-500 text-black font-medium hover:brightness-110 text-sm"
-            >
-              Export .h
-            </button>
-          </div>
-        </header>
-
-        <div className="flex flex-1 min-h-0">
-          {/* Sidebar */}
-          <aside className="w-80 min-w-[16rem] max-w-[22rem] bg-neutral-900 border-r border-neutral-800 p-3 space-y-3 overflow-y-auto">
-            <div className="space-y-3">
-              <h2 className="font-medium">Canvas</h2>
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <label className="flex items-center gap-2">W
-                  <input type="number" min={1} max={256} value={w} onChange={(e) => setW(clamp(parseInt(e.target.value) || 1, 1, 256))} className="w-16 bg-neutral-800 rounded px-2 py-1" />
-                </label>
-                <label className="flex items-center gap-2">H
-                  <input type="number" min={1} max={256} value={h} onChange={(e) => setH(clamp(parseInt(e.target.value) || 1, 1, 256))} className="w-16 bg-neutral-800 rounded px-2 py-1" />
-                </label>
-                <label className="flex items-center gap-2">Zoom
-                  <input type="range" min={4} max={32} value={zoom} onChange={(e) => setZoom(parseInt(e.target.value))} className="w-24" />
-                </label>
-                <div className="flex flex-wrap gap-2 w-full">
-                  <label className="flex items-center gap-1"><input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />Grid</label>
-                  <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorX} onChange={(e) => setMirrorX(e.target.checked)} />Mirror X</label>
-                  <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorY} onChange={(e) => setMirrorY(e.target.checked)} />Mirror Y</label>
+        {/* Enhanced Header with Branding */}
+        <header className="bg-gradient-to-r from-neutral-900 to-neutral-800 border-b border-neutral-700">
+          <div className="flex items-center justify-between gap-4 px-3 sm:px-4 py-4">
+            {/* Logo and Title Section */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                  <span className="text-white font-bold text-sm">P2C</span>
                 </div>
-                
-                {/* Grid customization controls */}
-                {showGrid && (
-                  <div className="space-y-2 w-full border-t border-neutral-700 pt-2">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-medium text-neutral-300">Grid Settings</label>
-                      <button 
-                        onClick={() => {
-                          setGridSize(1);
-                          setGridLineWidth(1);
-                          setGridOpacity(0.15);
-                          setGridOffset({ x: 0, y: 0 });
-                        }}
-                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
-                        title="Reset grid settings to defaults"
-                      >
-                        Reset
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <label className="flex items-center gap-1">
-                        Spacing
-                        <input 
-                          type="number" 
-                          min={1} 
-                          max={16} 
-                          value={gridSize} 
-                          onChange={(e) => setGridSize(clamp(parseInt(e.target.value) || 1, 1, 16))} 
-                          className="w-12 bg-neutral-800 rounded px-1 py-0.5 text-xs" 
-                          title="Grid line spacing (pixels between lines)"
-                        />
-                      </label>
-                      <div className="flex items-center gap-1">
-                        <label className="flex items-center gap-1">
-                          Opacity
-                          <input 
-                            type="range" 
-                            min={0.01} 
-                            max={0.3} 
-                            step={0.01} 
-                            value={gridOpacity} 
-                            onChange={(e) => setGridOpacity(parseFloat(e.target.value))} 
-                            className="w-16" 
-                            title="Grid line opacity"
-                          />
-                        </label>
-                        <span className="text-xs text-neutral-400">{(gridOpacity * 100).toFixed(0)}%</span>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <label className="flex items-center gap-1">
-                        Offset X
-                        <input 
-                          type="number" 
-                          min={-16} 
-                          max={16} 
-                          value={gridOffset.x} 
-                          onChange={(e) => setGridOffset(prev => ({ ...prev, x: clamp(parseInt(e.target.value) || 0, -16, 16) }))} 
-                          className="w-12 bg-neutral-800 rounded px-1 py-0.5 text-xs" 
-                          title="Horizontal grid offset"
-                        />
-                      </label>
-                      <label className="flex items-center gap-1">
-                        Offset Y
-                        <input 
-                          type="number" 
-                          min={-16} 
-                          max={16} 
-                          value={gridOffset.y} 
-                          onChange={(e) => setGridOffset(prev => ({ ...prev, y: clamp(parseInt(e.target.value) || 0, -16, 16) }))} 
-                          className="w-12 bg-neutral-800 rounded px-1 py-0.5 text-xs" 
-                          title="Vertical grid offset"
-                        />
-                      </label>
-                    </div>
-                    <div className="flex gap-1 flex-wrap">
-                      <button 
-                        onClick={() => { setGridSize(1); setGridOpacity(0.15); }}
-                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
-                        title="Standard 1x1 pixel grid"
-                      >
-                        1x1
-                      </button>
-                      <button 
-                        onClick={() => { setGridSize(8); setGridOpacity(0.25); }}
-                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
-                        title="8x8 pixel grid (common for 8-bit sprites)"
-                      >
-                        8x8
-                      </button>
-                      <button 
-                        onClick={() => { setGridSize(16); setGridOpacity(0.3); }}
-                        className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs"
-                        title="16x16 pixel grid (common for tiles)"
-                      >
-                        16x16
-                      </button>
-                    </div>
-                    <div className="text-xs text-neutral-500">
-                      Tip: Use spacing &gt; 1 to create grid sections. Offsets shift the grid position.
-                    </div>
-                  </div>
-                )}
-                <div className="space-y-2 w-full">
-                  <label className="block text-sm font-medium">Draw mode:</label>
-                  <select value={drawMode} onChange={(e) => setDrawMode(e.target.value)} className="w-full bg-neutral-800 rounded px-2 py-1 text-sm">
-                    <option value="HORIZONTAL_1BIT">Horizontal - 1 bit per pixel</option>
-                    <option value="VERTICAL_1BIT">Vertical - 1 bit per pixel</option>
-                    <option value="HORIZONTAL_RGB565">Horizontal - 2 bytes per pixel (565)</option>
-                    <option value="HORIZONTAL_ALPHA">Horizontal - 1 bit per pixel alpha map</option>
-                    <option value="HORIZONTAL_RGB888_24">Horizontal - 3 bytes per pixel (rgb888)</option>
-                    <option value="HORIZONTAL_RGB888_32">Horizontal - 4 bytes per pixel (rgba888)</option>
-                  </select>
-                  
-                  <label className="block text-sm font-medium mt-2">Code output format:</label>
-                  <select value={outputFormat} onChange={(e) => setOutputFormat(e.target.value)} className="w-full bg-neutral-800 rounded px-2 py-1 text-sm">
-                    <option value="ARDUINO_CODE">Arduino code</option>
-                    <option value="PLAIN_BYTES">Plain bytes</option>
-                    <option value="ARDUINO_SINGLE_BITMAP">Arduino code, single bitmap</option>
-                    <option value="GFX_BITMAP_FONT">Adafruit GFXbitmapFont</option>
-                  </select>
-                </div>
-                <div className="flex gap-2 w-full">
-                  <button onClick={clearCanvas} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Clear</button>
-                  <button onClick={() => { if (canUndo) setRedo((r) => [data.map(p=>({...p})), ...r]); if (canUndo) { const last = history[history.length - 1]; setHistory((h) => h.slice(0, -1)); setData(last.map(p => ({ ...p }))); } }} disabled={!canUndo} className={`px-3 py-1.5 rounded-xl text-sm ${canUndo ? "bg-neutral-800 hover:bg-neutral-700" : "bg-neutral-900 opacity-50"}`}>Undo</button>
-                  <button onClick={() => { if (!canRedo) return; const [next, ...rest] = redo; setHistory((h) => [...h, data.map(p=>({...p}))]); setData(next.map(p => ({ ...p }))); setRedo(rest); }} disabled={!canRedo} className={`px-3 py-1.5 rounded-xl text-sm ${canRedo ? "bg-neutral-800 hover:bg-neutral-700" : "bg-neutral-900 opacity-50"}`}>Redo</button>
+                <div>
+                  <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+                    Pixel2CPP
+                  </h1>
+                  <p className="text-xs text-neutral-400 -mt-1">
+                    Made by <a href="https://coderandom.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">CodeRandom</a>
+                  </p>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-3">
-              <h2 className="font-medium">Tools</h2>
-              <div className="flex flex-wrap gap-2">
-                {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
-                  <button key={k} onClick={() => setTool(k)} className={`px-3 py-1.5 rounded-xl text-sm ${tool === k ? "bg-emerald-500 text-black" : "bg-neutral-800 hover:bg-neutral-700"}`}>{k}</button>
-                ))}
-              </div>
-              <div className="flex items-center gap-3">
-                <div>
-                  <div className="text-xs opacity-70">Primary</div>
-                  <input type="color" value={rgbaToHex(primary)} onChange={(e) => setPrimary(parseCssColor(e.target.value))} className="w-10 h-8 bg-neutral-800 rounded" />
-                </div>
-                <div>
-                  <div className="text-xs opacity-70">Secondary (RMB)</div>
-                  <input type="color" value={rgbaToHex(secondary)} onChange={(e) => setSecondary(parseCssColor(e.target.value))} className="w-10 h-8 bg-neutral-800 rounded" />
-                </div>
-                <button onClick={swapColors} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Swap</button>
-              </div>
-              <div className="text-sm opacity-80">Draw mode: <span className="font-mono text-xs">{drawMode}</span></div>
-              <div className="text-sm opacity-80">Output: <span className="font-mono text-xs">{outputFormat}</span></div>
-              <div className="text-xs opacity-70">Tip: Right‑click draws with Secondary. Eyedropper picks Primary from canvas.</div>
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <input 
+                className="bg-neutral-800 rounded px-3 py-1 outline-none text-sm border border-neutral-700 focus:border-blue-500 transition-colors" 
+                value={name} 
+                onChange={(e) => setName(e.target.value)} 
+                title="Asset name" 
+                placeholder="Asset name"
+                aria-label="Asset name for exported code"
+              />
+              <label className="px-3 py-1.5 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 cursor-pointer text-sm transition-colors">
+                Upload Image
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) importImage(f); }} 
+                  className="hidden"
+                  aria-label="Upload image file"
+                />
+              </label>
+              <button 
+                onClick={handleGenerateCode} 
+                disabled={isGenerating}
+                className="px-3 py-1.5 rounded-xl bg-blue-500 text-white font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-colors"
+                aria-label="Generate C++ code"
+              >
+                {isGenerating ? "Generating..." : "Generate Code"}
+              </button>
+              <button 
+                onClick={exportCpp} 
+                className="px-3 py-1.5 rounded-xl bg-emerald-500 text-black font-medium hover:brightness-110 text-sm transition-colors"
+                aria-label="Export as header file"
+              >
+                Export .h
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex flex-1 min-h-0">
+          {/* Sidebar with Tabs */}
+          <aside className="w-80 min-w-[16rem] max-w-[22rem] bg-neutral-900 border-r border-neutral-800 flex flex-col">
+            {/* Sidebar Tab Navigation */}
+            <div className="flex border-b border-neutral-800">
+              <button
+                onClick={() => setSidebarTab("settings")}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-all ${
+                  sidebarTab === "settings" 
+                    ? 'bg-neutral-800 text-blue-400 border-b-2 border-blue-500' 
+                    : 'text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50'
+                }`}
+                aria-label="Settings tab"
+              >
+                ⚙️ Settings
+              </button>
+              <button
+                onClick={() => setSidebarTab("tools")}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-all ${
+                  sidebarTab === "tools" 
+                    ? 'bg-neutral-800 text-emerald-400 border-b-2 border-emerald-500' 
+                    : 'text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50'
+                }`}
+                aria-label="Tools and shortcuts tab"
+              >
+                🛠️ Tools & Shortcuts
+              </button>
+            </div>
+
+            {/* Sidebar Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {sidebarTab === "settings" && (
+                <>
+                  {/* Canvas Settings */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-semibold text-lg">Canvas Settings</h2>
+                      <div className="w-4 h-4 bg-blue-500 rounded-full"></div>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-sm font-medium text-neutral-300">Width</span>
+                          <input 
+                            type="number" 
+                            min={1} 
+                            max={256} 
+                            value={w} 
+                            onChange={(e) => setW(clamp(parseInt(e.target.value) || 1, 1, 256))} 
+                            className="w-full bg-neutral-800 rounded px-3 py-2 border border-neutral-700 focus:border-blue-500 transition-colors" 
+                            aria-label="Canvas width in pixels"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-sm font-medium text-neutral-300">Height</span>
+                          <input 
+                            type="number" 
+                            min={1} 
+                            max={256} 
+                            value={h} 
+                            onChange={(e) => setH(clamp(parseInt(e.target.value) || 1, 1, 256))} 
+                            className="w-full bg-neutral-800 rounded px-3 py-2 border border-neutral-700 focus:border-blue-500 transition-colors" 
+                            aria-label="Canvas height in pixels"
+                          />
+                        </label>
+                      </div>
+                      
+                      <label className="flex flex-col gap-2">
+                        <span className="text-sm font-medium text-neutral-300">Zoom Level</span>
+                        <div className="flex items-center gap-3">
+                          <input 
+                            type="range" 
+                            min={4} 
+                            max={32} 
+                            value={zoom} 
+                            onChange={(e) => setZoom(parseInt(e.target.value))} 
+                            className="flex-1" 
+                            aria-label="Canvas zoom level"
+                          />
+                          <span className="text-sm text-neutral-400 min-w-[2rem]">{zoom}x</span>
+                        </div>
+                      </label>
+                      
+                      <div className="space-y-2">
+                        <span className="text-sm font-medium text-neutral-300">Canvas Options</span>
+                        <div className="flex flex-wrap gap-3">
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={mirrorX} 
+                              onChange={(e) => setMirrorX(e.target.checked)} 
+                              className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
+                              aria-label="Mirror drawing horizontally"
+                            />
+                            <span className="text-sm">Mirror X</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={mirrorY} 
+                              onChange={(e) => setMirrorY(e.target.checked)} 
+                              className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
+                              aria-label="Mirror drawing vertically"
+                            />
+                            <span className="text-sm">Mirror Y</span>
+                          </label>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <span className="text-sm font-medium text-neutral-300">Background Color</span>
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="radio" 
+                                name="backgroundColor" 
+                                value="black" 
+                                checked={backgroundColor === "black"} 
+                                onChange={(e) => setBackgroundColor(e.target.value)} 
+                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
+                                aria-label="Black background"
+                              />
+                              <span className="text-sm">Black</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="radio" 
+                                name="backgroundColor" 
+                                value="white" 
+                                checked={backgroundColor === "white"} 
+                                onChange={(e) => setBackgroundColor(e.target.value)} 
+                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
+                                aria-label="White background"
+                              />
+                              <span className="text-sm">White</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="radio" 
+                                name="backgroundColor" 
+                                value="transparent" 
+                                checked={backgroundColor === "transparent"} 
+                                onChange={(e) => setBackgroundColor(e.target.value)} 
+                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
+                                aria-label="Transparent background"
+                              />
+                              <span className="text-sm">Transparent</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="radio" 
+                                name="backgroundColor" 
+                                value="custom" 
+                                checked={backgroundColor === "custom"} 
+                                onChange={(e) => setBackgroundColor(e.target.value)} 
+                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
+                                aria-label="Custom background color"
+                              />
+                              <span className="text-sm">Custom</span>
+                            </label>
+                          </div>
+                          {backgroundColor === "custom" && (
+                            <div className="flex items-center gap-2">
+                              <input 
+                                type="color" 
+                                value={customBackgroundColor} 
+                                onChange={(e) => setCustomBackgroundColor(e.target.value)} 
+                                className="w-8 h-8 bg-neutral-800 rounded border border-neutral-700 cursor-pointer" 
+                                aria-label="Custom background color picker"
+                              />
+                              <input 
+                                type="text" 
+                                value={customBackgroundColor} 
+                                onChange={(e) => setCustomBackgroundColor(e.target.value)} 
+                                className="flex-1 bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-blue-500 transition-colors" 
+                                placeholder="#000000"
+                                aria-label="Custom background color hex value"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Export Settings */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-semibold text-lg">Export Settings</h2>
+                      <div className="w-4 h-4 bg-purple-500 rounded-full"></div>
+                    </div>
+                    <div className="space-y-3">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-sm font-medium text-neutral-300">Draw mode:</span>
+                        <select 
+                          value={drawMode} 
+                          onChange={(e) => setDrawMode(e.target.value)} 
+                          className="w-full bg-neutral-800 rounded-lg px-3 py-2 text-sm border border-neutral-700 focus:border-purple-500 transition-colors"
+                          aria-label="Select draw mode"
+                        >
+                          <option value="HORIZONTAL_1BIT">Horizontal - 1 bit per pixel</option>
+                          <option value="VERTICAL_1BIT">Vertical - 1 bit per pixel</option>
+                          <option value="HORIZONTAL_RGB565">Horizontal - 2 bytes per pixel (565)</option>
+                          <option value="HORIZONTAL_ALPHA">Horizontal - 1 bit per pixel alpha map</option>
+                          <option value="HORIZONTAL_RGB888_24">Horizontal - 3 bytes per pixel (rgb888)</option>
+                          <option value="HORIZONTAL_RGB888_32">Horizontal - 4 bytes per pixel (rgba888)</option>
+                        </select>
+                      </label>
+                      
+                      <label className="flex flex-col gap-1">
+                        <span className="text-sm font-medium text-neutral-300">Code output format:</span>
+                        <select 
+                          value={outputFormat} 
+                          onChange={(e) => setOutputFormat(e.target.value)} 
+                          className="w-full bg-neutral-800 rounded-lg px-3 py-2 text-sm border border-neutral-700 focus:border-purple-500 transition-colors"
+                          aria-label="Select output format"
+                        >
+                          <option value="ARDUINO_CODE">Arduino code</option>
+                          <option value="PLAIN_BYTES">Plain bytes</option>
+                          <option value="ARDUINO_SINGLE_BITMAP">Arduino code, single bitmap</option>
+                          <option value="GFX_BITMAP_FONT">Adafruit GFXbitmapFont</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Canvas Actions */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-semibold text-lg">Canvas Actions</h2>
+                      <div className="w-4 h-4 bg-orange-500 rounded-full"></div>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-2">
+                        <button 
+                          onClick={clearCanvas} 
+                          className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm transition-colors"
+                          aria-label="Clear canvas"
+                        >
+                          Clear
+                        </button>
+                        <button 
+                          onClick={() => { 
+                            if (canUndo) {
+                              setRedo((r) => [data.map(p=>({...p})), ...r]); 
+                              const last = history[history.length - 1]; 
+                              setHistory((h) => h.slice(0, -1)); 
+                              setData(last.map(p => ({ ...p }))); 
+                            }
+                          }} 
+                          disabled={!canUndo} 
+                          className={`px-3 py-2 rounded-lg text-sm transition-colors ${
+                            canUndo 
+                              ? "bg-neutral-800 hover:bg-neutral-700" 
+                              : "bg-neutral-900 opacity-50 cursor-not-allowed"
+                          }`}
+                          aria-label="Undo last action"
+                        >
+                          Undo
+                        </button>
+                        <button 
+                          onClick={() => { 
+                            if (!canRedo) return; 
+                            const [next, ...rest] = redo; 
+                            setHistory((h) => [...h, data.map(p=>({...p}))]); 
+                            setData(next.map(p => ({ ...p }))); 
+                            setRedo(rest); 
+                          }} 
+                          disabled={!canRedo} 
+                          className={`px-3 py-2 rounded-lg text-sm transition-colors ${
+                            canRedo 
+                              ? "bg-neutral-800 hover:bg-neutral-700" 
+                              : "bg-neutral-900 opacity-50 cursor-not-allowed"
+                          }`}
+                          aria-label="Redo last undone action"
+                        >
+                          Redo
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {sidebarTab === "tools" && (
+                <>
+                  {/* Drawing Tools */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-semibold text-lg">Drawing Tools</h2>
+                      <div className="w-4 h-4 bg-emerald-500 rounded-full"></div>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
+                          <button 
+                            key={k} 
+                            onClick={() => setTool(k)} 
+                            className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                              tool === k 
+                                ? "bg-emerald-500 text-black shadow-lg" 
+                                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+                            }`}
+                            aria-label={`Select ${k} tool`}
+                          >
+                            {k.charAt(0).toUpperCase() + k.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <span className="text-sm font-medium text-neutral-300">Colors</span>
+                        <div className="flex items-center gap-3">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs text-neutral-400">Primary</span>
+                            <input 
+                              type="color" 
+                              value={rgbaToHex(primary)} 
+                              onChange={(e) => setPrimary(parseCssColor(e.target.value))} 
+                              className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
+                              aria-label="Primary color picker"
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs text-neutral-400">Secondary (RMB)</span>
+                            <input 
+                              type="color" 
+                              value={rgbaToHex(secondary)} 
+                              onChange={(e) => setSecondary(parseCssColor(e.target.value))} 
+                              className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
+                              aria-label="Secondary color picker"
+                            />
+                          </div>
+                          <button 
+                            onClick={swapColors} 
+                            className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm transition-colors self-end"
+                            aria-label="Swap primary and secondary colors"
+                          >
+                            Swap
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <span className="text-sm font-medium text-neutral-300">Current Settings</span>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Draw mode:</span>
+                            <span className="font-mono text-blue-400">{drawMode}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Output:</span>
+                            <span className="font-mono text-purple-400">{outputFormat}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="text-xs text-neutral-500 bg-neutral-800/50 p-2 rounded-lg">
+                        💡 Tip: Right‑click draws with Secondary color. Eyedropper picks Primary from canvas.
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Keyboard Shortcuts */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-semibold text-lg">Keyboard Shortcuts</h2>
+                      <div className="w-4 h-4 bg-yellow-500 rounded-full"></div>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="space-y-2 text-xs">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Left Click:</span>
+                            <span className="font-mono text-white">Draw (Primary)</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Right Click:</span>
+                            <span className="font-mono text-white">Draw (Secondary)</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Ctrl+Z:</span>
+                            <span className="font-mono text-white">Undo</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Ctrl+Y:</span>
+                            <span className="font-mono text-white">Redo</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <span className="text-sm font-medium text-neutral-300">Tool Shortcuts</span>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">B:</span>
+                            <span className="font-mono text-white">Brush/Pen</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">E:</span>
+                            <span className="font-mono text-white">Erase</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">F:</span>
+                            <span className="font-mono text-white">Fill</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">I:</span>
+                            <span className="font-mono text-white">Eyedropper</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">C:</span>
+                            <span className="font-mono text-white">Clear Canvas</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">X:</span>
+                            <span className="font-mono text-white">Swap Colors</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <span className="text-sm font-medium text-neutral-300">Zoom Shortcuts</span>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Ctrl++:</span>
+                            <span className="font-mono text-white">Zoom In</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Ctrl+-:</span>
+                            <span className="font-mono text-white">Zoom Out</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-neutral-400">Ctrl+0:</span>
+                            <span className="font-mono text-white">Reset Zoom</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-neutral-500 bg-neutral-800/50 p-2 rounded-lg text-xs">
+                        💡 Tip: Use the eyedropper tool to pick colors from your canvas
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </aside>
 
           {/* Main */}
           <main className="flex-1 min-w-0 flex flex-col">
-            <nav className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
+            <nav className="flex items-center gap-2 border-b border-neutral-800 px-4 py-3 bg-neutral-900/50">
               {(["Editor", "Snippets", "Tests"]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`px-3 py-1.5 rounded-xl text-sm ${activeTab === tab ? 'bg-neutral-800' : 'hover:bg-neutral-900'}`}
-                >{tab}</button>
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                    activeTab === tab 
+                      ? 'bg-blue-500 text-white shadow-lg' 
+                      : 'hover:bg-neutral-800 text-neutral-300'
+                  }`}
+                  aria-label={`Switch to ${tab} tab`}
+                >
+                  {tab}
+                </button>
               ))}
             </nav>
-            <div className="flex-1 min-h-0 p-3 overflow-auto">
+            <div className="flex-1 min-h-0 p-4 overflow-auto">
               {activeTab === 'Editor' && (
-                <div className="bg-neutral-900 rounded-2xl p-4 overflow-auto inline-block">
-                  <PixelCanvas
-                    width={w}
-                    height={h}
-                    zoom={zoom}
-                    pixels={data}
-                    showGrid={showGrid}
-                    gridSize={gridSize}
-                    gridLineWidth={gridLineWidth}
-                    gridOpacity={gridOpacity}
-                    gridOffset={gridOffset}
-                    cursor={tool === "eyedropper" ? "crosshair" : "pointer"}
-                    onPointerDown={handleMouseDown}
-                    onPointerMove={handleMouseMove}
-                    onPointerUp={handleMouseUp}
-                  />
+                <div className="space-y-4">
+                  {/* Welcome message for new users */}
+                  {data.every(p => p.a === 0) && (
+                    <div className="bg-gradient-to-r from-blue-900/30 to-purple-900/30 border border-blue-500/30 rounded-2xl p-6">
+                      <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                          <span className="text-white font-bold text-lg">🎨</span>
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="text-lg font-semibold text-white mb-2">Welcome to Pixel2CPP!</h3>
+                          <p className="text-neutral-300 mb-4">
+                            Create pixel art and export Arduino-ready C++ code instantly. Perfect for embedded displays, 
+                            OLED screens, and microcontroller projects.
+                          </p>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                              <span>Draw with left-click, erase with right-click</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                              <span>Use tools: Pen, Erase, Fill, Eyedropper</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
+                              <span>Export code for Arduino, ESP32, and more</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Canvas Container */}
+                  <div className="bg-neutral-900 rounded-2xl p-4 overflow-auto inline-block shadow-xl border border-neutral-700">
+                    <PixelCanvas
+                      width={w}
+                      height={h}
+                      zoom={zoom}
+                      pixels={data}
+                      backgroundColor={backgroundColor}
+                      customBackgroundColor={customBackgroundColor}
+                      cursor={tool === "eyedropper" ? "crosshair" : "pointer"}
+                      onPointerDown={handleMouseDown}
+                      onPointerMove={handleMouseMove}
+                      onPointerUp={handleMouseUp}
+                    />
+                  </div>
+                  
+                  {/* Canvas Info */}
+                  <div className="bg-neutral-900/50 rounded-xl p-4 border border-neutral-700">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div className="text-center">
+                        <div className="text-neutral-400">Canvas Size</div>
+                        <div className="font-mono text-white">{w} × {h} px</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-neutral-400">Zoom Level</div>
+                        <div className="font-mono text-white">{zoom}×</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-neutral-400">Active Tool</div>
+                        <div className="font-medium text-emerald-400 capitalize">{tool}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-neutral-400">Draw Mode</div>
+                        <div className="font-mono text-blue-400 text-xs">{drawMode}</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1369,40 +1840,60 @@ void loop(){}`}</pre>
                 </div>
               )}
             </div>
-            <footer className="text-xs opacity-60 text-center py-2 border-t border-neutral-800">Made for makers. No tracking, all local. ✨</footer>
+            <footer className="text-xs opacity-60 text-center py-3 border-t border-neutral-800 bg-neutral-900/50">
+              <div className="flex items-center justify-center gap-4">
+                <span>Made for makers. No tracking, all local. ✨</span>
+                <span>•</span>
+                <a href="https://coderandom.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">
+                  Made by CodeRandom
+                </a>
+              </div>
+            </footer>
           </main>
         </div>
         {/* Code Modal */}
         {showCodeModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 modal-backdrop flex items-center justify-center p-4 z-50">
-            <div className="bg-neutral-900 rounded-2xl p-6 max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold">Generated C++ Code</h2>
-                <div className="flex gap-2">
+          <div className="fixed inset-0 bg-black bg-opacity-60 modal-backdrop flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+            <div className="bg-neutral-900 rounded-2xl p-6 max-w-5xl w-full max-h-[85vh] overflow-hidden flex flex-col shadow-2xl border border-neutral-700">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 id="modal-title" className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+                    Generated C++ Code
+                  </h2>
+                  <p className="text-sm text-neutral-400 mt-1">
+                    Ready to use in your Arduino project
+                  </p>
+                </div>
+                <div className="flex gap-3">
                   <button
                     onClick={handleCopyCode}
-                    className={`px-4 py-2 rounded-xl text-sm font-medium ${
+                    className={`px-6 py-3 rounded-xl text-sm font-medium transition-all ${
                       copyStatus === "copied" 
-                        ? "bg-green-500 text-white" 
+                        ? "bg-green-500 text-white shadow-lg" 
                         : copyStatus === "error"
-                        ? "bg-red-500 text-white"
-                        : "bg-blue-500 text-white hover:bg-blue-600"
+                        ? "bg-red-500 text-white shadow-lg"
+                        : "bg-blue-500 text-white hover:bg-blue-600 shadow-lg hover:shadow-xl"
                     }`}
+                    aria-label="Copy generated code to clipboard"
                   >
-                    {copyStatus === "copied" ? "Copied!" : copyStatus === "error" ? "Error!" : "Copy Code"}
+                    {copyStatus === "copied" ? "✓ Copied!" : copyStatus === "error" ? "✗ Error!" : "📋 Copy Code"}
                   </button>
                   <button
                     onClick={() => setShowCodeModal(false)}
-                    className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm"
+                    className="px-6 py-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm transition-colors"
+                    aria-label="Close code modal"
                   >
-                    Close
+                    ✕ Close
                   </button>
                 </div>
               </div>
               <div className="flex-1 overflow-auto">
-                <pre className="bg-neutral-950 rounded-xl p-4 overflow-auto text-xs whitespace-pre-wrap">
+                <pre className="bg-neutral-950 rounded-xl p-6 overflow-auto text-sm whitespace-pre-wrap border border-neutral-700 shadow-inner">
                   {generateCppCode()}
                 </pre>
+              </div>
+              <div className="mt-4 text-xs text-neutral-500 text-center">
+                Generated by Pixel2CPP • Made by <a href="https://coderandom.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">CodeRandom</a>
               </div>
             </div>
           </div>

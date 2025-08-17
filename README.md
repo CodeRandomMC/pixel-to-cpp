@@ -7,9 +7,9 @@
 
 Pixel2CPP is a browser-based pixel art editor designed for Arduino and embedded display development. Draw your sprites, icons, and graphics, then export them as optimized C++ arrays ready to use with popular display libraries like Adafruit_GFX.
 
-🎮 **[Try it live](https://your-domain.com)** | 📖 **[Documentation](#usage-guide)** | 🐛 **[Report Issues](https://github.com/your-username/pixel-to-cpp/issues)**
+🎮 **[Try it live](https://coderandom.com/pixel-to-cpp)** | 📖 **[Documentation](#usage-guide)** | 🐛 **[Report Issues](https://github.com/CodeRandomMC/pixel-to-cpp/issues)**
 
-![Pixel2CPP Screenshot](screenshot.png)
+![Pixel2CPP Screenshot](https://raw.githubusercontent.com/CodeRandomMC/pixel-to-cpp/main/screenshot.png)
 
 ## ✨ Key Features
 
@@ -24,7 +24,7 @@ Pixel2CPP is a browser-based pixel art editor designed for Arduino and embedded 
 ## 🚀 Quick Start
 
 ### Using the Online Version (Recommended)
-1. Open [Pixel2CPP](https://your-domain.com) in your browser
+1. Open [Pixel2CPP](https://coderandom.com/pixel-to-cpp) in your browser
 2. Set your canvas size to match your display
 3. Choose your export format (see [Supported Formats](#supported-formats))
 4. Start drawing your pixel art
@@ -34,7 +34,7 @@ Pixel2CPP is a browser-based pixel art editor designed for Arduino and embedded 
 ### Running Locally
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/pixel-to-cpp.git
+git clone https://github.com/CodeRandomMC/pixel-to-cpp.git
 cd pixel-to-cpp
 
 # Install dependencies
@@ -277,8 +277,8 @@ The tests validate:
 
 Found a bug or have a feature request? We'd love to hear from you!
 
-- 🐛 **Report bugs**: [Open an issue](https://github.com/your-username/pixel-to-cpp/issues)
-- 💡 **Request features**: [Start a discussion](https://github.com/your-username/pixel-to-cpp/discussions)
+- 🐛 **Report bugs**: [Open an issue](https://github.com/CodeRandomMC/pixel-to-cpp/issues)
+- 💡 **Request features**: [Start a discussion](https://github.com/CodeRandomMC/pixel-to-cpp/discussions)
 - 🔧 **Submit pull requests**: Fork, branch, and PR
 - 📖 **Improve docs**: Help make this guide even better
 
@@ -286,8 +286,17 @@ Found a bug or have a feature request? We'd love to hear from you!
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
+**⚠️ Important Notice:** This software is provided **free of charge** for educational and personal use. While the MIT License allows commercial use, we strongly discourage selling or commercializing this software. This tool was created to help the Arduino and embedded development community, not for profit.
+
+**Please respect the spirit of open source:**
+- ✅ Use freely for learning and personal projects
+- ✅ Modify and improve for your own needs
+- ✅ Share improvements with the community
+- ❌ Do not sell this software or charge for its use
+- ❌ Do not redistribute for commercial gain
+
 Made with ❤️ by **CodeRandom** for the Arduino and embedded community.
 
 ---
 
-**Need help?** Check out our [examples](examples/) directory or join the [community discussions](https://github.com/your-username/pixel-to-cpp/discussions).
+**Need help?** Check out our [examples](https://github.com/CodeRandomMC/pixel-to-cpp/tree/main/examples) directory or join the [community discussions](https://github.com/CodeRandomMC/pixel-to-cpp/discussions).

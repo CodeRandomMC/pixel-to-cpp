@@ -1,3 +1,13 @@
+/*
+ * Pixel2CPP - Pixel Canvas Component
+ * 
+ * MIT License
+ * Copyright (c) 2025 CodeRandom
+ * 
+ * This software is provided free of charge for educational and personal use.
+ * Commercial use and redistribution must comply with the MIT License terms.
+ */
+
 import React, { useEffect, useRef } from "react";
 
 // Efficient canvas renderer for pixel grid
@@ -6,11 +16,8 @@ export default function PixelCanvas({
   height,
   zoom,
   pixels,
-  showGrid,
-  gridSize = 1,
-  gridLineWidth = 0.5,
-  gridOpacity = 0.3,
-  gridOffset = { x: 0, y: 0 },
+  backgroundColor = "black",
+  customBackgroundColor = "#000000",
   cursor,
   onPointerDown,
   onPointerMove,
@@ -36,13 +43,28 @@ export default function PixelCanvas({
     // Clear the canvas
     ctx.clearRect(0, 0, width, height);
 
+    // Set background color based on the selected option
+    let bgColor = '#000000'; // Default black
+    if (backgroundColor === "white") {
+      bgColor = '#ffffff';
+    } else if (backgroundColor === "transparent") {
+      bgColor = 'transparent';
+    } else if (backgroundColor === "custom") {
+      bgColor = customBackgroundColor;
+    }
+    // For "black" or any other case, use default black
+
+    // Fill background if not transparent
+    if (bgColor !== 'transparent') {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, width, height);
+    }
+
     // Draw pixel buffer directly at 1:1
     // Ensure we have valid pixel data
     if (!pixels || pixels.length !== width * height) {
       // During resize operations, there might be a temporary mismatch
-      // Just fill with a default background color instead of showing white
-      ctx.fillStyle = '#1f2937'; // neutral-800 background
-      ctx.fillRect(0, 0, width, height);
+      // Just return early since we already set the background
       return;
     }
     
@@ -63,63 +85,11 @@ export default function PixelCanvas({
     ctx.putImageData(imageData, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
-    // Draw grid to clearly show individual pixels
-    if (showGrid) {
-      // Use a more visible grid with better contrast
-      ctx.strokeStyle = `rgba(255,255,255,${Math.max(gridOpacity, 0.3)})`;
-      ctx.lineWidth = Math.max(gridLineWidth, 0.5); // Make lines more visible
-      
-      if (gridSize === 1) {
-        // Standard pixel grid - draw lines to clearly separate each pixel
-        // Draw vertical lines at pixel boundaries
-        for (let x = 0; x <= width; x++) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
-          ctx.stroke();
-        }
-        
-        // Draw horizontal lines at pixel boundaries
-        for (let y = 0; y <= height; y++) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(width, y);
-          ctx.stroke();
-        }
-      } else {
-        // Section grid - draw lines at section boundaries
-        for (let x = 0; x <= width; x += gridSize) {
-          const xPos = x + gridOffset.x;
-          if (xPos >= 0 && xPos <= width) {
-            ctx.beginPath();
-            ctx.moveTo(xPos, 0);
-            ctx.lineTo(xPos, height);
-            ctx.stroke();
-          }
-        }
-        
-        for (let y = 0; y <= height; y += gridSize) {
-          const yPos = y + gridOffset.y;
-          if (yPos >= 0 && yPos <= height) {
-            ctx.beginPath();
-            ctx.moveTo(0, yPos);
-            ctx.lineTo(width, yPos);
-            ctx.stroke();
-          }
-        }
-      }
-      
-      // Draw border around the entire canvas
-      ctx.strokeStyle = `rgba(255,255,255,${Math.min(gridOpacity * 1.5, 0.4)})`;
-      ctx.lineWidth = Math.max(gridLineWidth * 1.5, 0.75); // Slightly thicker border
-      ctx.strokeRect(0, 0, width, height);
-    } else {
-      // Draw only the border when grid is disabled
-      ctx.strokeStyle = "rgba(255,255,255,0.08)";
-      ctx.lineWidth = 0.05;
-      ctx.strokeRect(0, 0, width, height);
-    }
-  }, [pixels, width, height, zoom, showGrid, gridSize, gridLineWidth, gridOpacity, gridOffset]);
+    // Draw a simple border around the canvas
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.lineWidth = 0.5;
+    ctx.strokeRect(0, 0, width, height);
+  }, [pixels, width, height, zoom, backgroundColor, customBackgroundColor]);
 
   // Also ensure the canvas style updates are applied correctly
   useEffect(() => {
@@ -134,6 +104,16 @@ export default function PixelCanvas({
     }
   }, [zoom]);
 
+  // Determine fallback background color for CSS
+  let fallbackBgColor = '#000000'; // Default black
+  if (backgroundColor === "white") {
+    fallbackBgColor = '#ffffff';
+  } else if (backgroundColor === "transparent") {
+    fallbackBgColor = 'transparent';
+  } else if (backgroundColor === "custom") {
+    fallbackBgColor = customBackgroundColor;
+  }
+
   return (
     <canvas
       ref={canvasRef}
@@ -143,7 +123,7 @@ export default function PixelCanvas({
         imageRendering: "pixelated",
         cursor: cursor,
         display: "block",
-        backgroundColor: '#1f2937', // Fallback background color to prevent white flash
+        backgroundColor: fallbackBgColor, // Fallback background color to prevent white flash
       }}
       onMouseDown={onPointerDown}
       onMouseMove={onPointerMove}
