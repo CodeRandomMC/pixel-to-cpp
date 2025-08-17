@@ -31,7 +31,7 @@ export function pack1bit(pixels, width, height, orientation = 'horizontal') {
       let cur = 0;
       for (let x = 0; x < width; x++) {
         const p = pixels[I(x, y)];
-        const on = p.a > 0 && (p.r + p.g + p.b) < (255 * 3) / 2; // darker pixel → 1
+        const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1 (white = on)
         if (on) cur |= 1 << bit;
         bit--;
         if (bit < 0) {
@@ -51,7 +51,7 @@ export function pack1bit(pixels, width, height, orientation = 'horizontal') {
           const y = yPage * 8 + (7 - bit);
           if (y < height) {
             const p = pixels[I(x, y)];
-            const on = p.a > 0 && (p.r + p.g + p.b) < (255 * 3) / 2;
+            const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1 (white = on)
             if (on) cur |= 1 << bit;
           }
         }
@@ -72,7 +72,7 @@ export function pack1bitAlpha(pixels, width, height, orientation = 'horizontal')
       let cur = 0;
       for (let x = 0; x < width; x++) {
         const p = pixels[I(x, y)];
-        const hasAlpha = p.a > 127; // alpha threshold
+        const hasAlpha = p.a > 127; // alpha threshold (opaque = on)
         if (hasAlpha) cur |= 1 << bit;
         bit--;
         if (bit < 0) {

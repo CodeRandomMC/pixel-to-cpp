@@ -76,10 +76,22 @@ export default function PixelCanvas({
         const p = pixels[offset + x];
         if (!p) continue; // Skip if pixel is undefined
         const i = (y * width + x) * 4;
-        buf[i] = p.a === 0 ? 0 : p.r;
-        buf[i + 1] = p.a === 0 ? 0 : p.g;
-        buf[i + 2] = p.a === 0 ? 0 : p.b;
-        buf[i + 3] = p.a;
+        // For transparent pixels, use the background color instead of black
+        if (p.a === 0) {
+          if (backgroundColor === "white") {
+            buf[i] = 255; buf[i + 1] = 255; buf[i + 2] = 255; buf[i + 3] = 255;
+          } else if (backgroundColor === "black") {
+            buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 255;
+          } else {
+            // For transparent background, keep transparent
+            buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 0;
+          }
+        } else {
+          buf[i] = p.r;
+          buf[i + 1] = p.g;
+          buf[i + 2] = p.b;
+          buf[i + 3] = p.a;
+        }
       }
     }
     ctx.putImageData(imageData, 0, 0);
