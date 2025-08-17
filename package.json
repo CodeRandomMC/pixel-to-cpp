@@ -10,7 +10,7 @@
     "type": "git",
     "url": "https://github.com/CodeRandomMC/pixel-to-cpp.git"
   },
-  "homepage": "https://coderandom.com/pixel-to-cpp",
+  "homepage": "https://coderandommc.github.io/pixel-to-cpp",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

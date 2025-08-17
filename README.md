@@ -7,7 +7,7 @@
 
 Pixel2CPP is a browser-based pixel art editor designed for Arduino and embedded display development. Draw your sprites, icons, and graphics, then export them as optimized C++ arrays ready to use with popular display libraries like Adafruit_GFX.
 
-🎮 **[Try it live](https://coderandom.com/pixel-to-cpp)** | 📖 **[Documentation](#usage-guide)** | 🐛 **[Report Issues](https://github.com/CodeRandomMC/pixel-to-cpp/issues)**
+🎮 **[Try it live](https://coderandommc.github.io/pixel-to-cpp)** | 📖 **[Documentation](#usage-guide)** | 🐛 **[Report Issues](https://github.com/CodeRandomMC/pixel-to-cpp/issues)**
 
 ![Pixel2CPP Screenshot](https://raw.githubusercontent.com/CodeRandomMC/pixel-to-cpp/main/screenshot.png)
 
@@ -44,7 +44,27 @@ npm install
 npm run dev
 
 # Open http://localhost:5173 in your browser
+
+### Building for Production
+```bash
+# Build the project
+npm run build
+
+# Preview the production build
+npm run preview
 ```
+
+### Deploying to GitHub Pages
+
+This project is configured to automatically deploy to GitHub Pages when you push to the main branch. The deployment is handled by GitHub Actions.
+
+**Manual Deployment:**
+1. Build the project: `npm run build`
+2. The built files will be in the `dist/` directory
+3. Configure GitHub Pages in your repository settings to serve from the `dist/` directory
+4. Or use the GitHub Actions workflow (recommended)
+
+**GitHub Pages URL:** `https://coderandommc.github.io/pixel-to-cpp`
 
 ## 📖 Usage Guide
 
