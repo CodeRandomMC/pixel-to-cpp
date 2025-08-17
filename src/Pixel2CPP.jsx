@@ -1,85 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-
-// =============================================================
-// Pixel2CPP — Browser pixel editor that exports Arduino-ready C++
-// - 1-bit packed bytes for SSD1306 (Adafruit_GFX drawBitmap)
-// - RGB565 16-bit values for color TFTs (ILI9341/ST7735/etc.)
-//
-// Includes a tiny built-in test runner to validate packing logic.
-// =============================================================
-
-// ---------- Helpers (plain JS, no TS) ----------
-const clamp = (n, min = 0, max = 255) => Math.max(min, Math.min(max, n));
-const transparent = () => ({ r: 0, g: 0, b: 0, a: 0 });
-const black = () => ({ r: 0, g: 0, b: 0, a: 255 });
-const white = () => ({ r: 255, g: 255, b: 255, a: 255 });
-const rgbaEq = (a, b) => a.r === b.r && a.g === b.g && a.b === b.b && a.a === b.a;
-const pixelToCss = (p) => `rgba(${p.r},${p.g},${p.b},${(p.a ?? 255) / 255})`;
-const rgbaToHex = (p) => {
-  const to2 = (v) => v.toString(16).padStart(2, "0");
-  return `#${to2(p.r)}${to2(p.g)}${to2(p.b)}`;
-};
-
-function parseCssColor(css) {
-  const c = document.createElement("canvas");
-  c.width = c.height = 1;
-  const ctx = c.getContext("2d");
-  ctx.fillStyle = css;
-  ctx.fillRect(0, 0, 1, 1);
-  const [r, g, b, a] = Array.from(ctx.getImageData(0, 0, 1, 1).data);
-  return { r, g, b, a };
-}
-
-function rgbTo565(r, g, b) {
-  const R = (r >> 3) & 0x1f;
-  const G = (g >> 2) & 0x3f;
-  const B = (b >> 3) & 0x1f;
-  return (R << 11) | (G << 5) | B; // 0..65535
-}
-function hex565(v) {
-  return "0x" + v.toString(16).toUpperCase().padStart(4, "0");
-}
-
-function download(filename, text) {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 0);
-}
-
-// Copy to clipboard helper
-async function copyToClipboard(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch (err) {
-    // Fallback for older browsers
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    textArea.style.position = "fixed";
-    textArea.style.left = "-999999px";
-    textArea.style.top = "-999999px";
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    const result = document.execCommand("copy");
-    document.body.removeChild(textArea);
-    return result;
-  }
-}
+import PixelCanvas from "./components/PixelCanvas.jsx";
+import { clamp, transparent, black, white, rgbaEq, rgbaToHex, parseCssColor } from "./lib/colors.js";
+import { pack1bit, packRGB565, packRGB24, packRGB332, packGray4, rgbTo332, hex565 } from "./lib/packers.js";
+import { download, copyToClipboard } from "./lib/io.js";
 
 // ---------- Component ----------
 export default function Pixel2CPP() {
   // Core state (make sure w/h are defined before any use)
-  const [mode, setMode] = useState("1BIT"); // "1BIT" | "RGB565" | "BMP"
-  const [board, setBoard] = useState("ESP8266"); // "ESP8266" | "ESP32" | "Arduino"
+  const [mode, setMode] = useState("1BIT"); // "1BIT" | "RGB565" | "RGB24" | "RGB332" | "GRAY4"
+  const [displayType, setDisplayType] = useState("SSD1306"); // Display-specific options
   const [w, setW] = useState(64);
   const [h, setH] = useState(64);
   const [zoom, setZoom] = useState(8); // pixel size in CSS px
@@ -95,6 +24,7 @@ export default function Pixel2CPP() {
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [copyStatus, setCopyStatus] = useState(""); // "", "copied", "error"
   const [isGenerating, setIsGenerating] = useState(false);
+  const [activeTab, setActiveTab] = useState("Editor"); // Editor | Snippets | Tests
 
   // Pixel buffer
   const [data, setData] = useState(() => Array.from({ length: w * h }, () => transparent()));
@@ -256,64 +186,7 @@ export default function Pixel2CPP() {
     img.src = URL.createObjectURL(file);
   };
 
-  // Export helpers
-  const pack1bit = (pixels, width, height) => {
-    const bytes = [];
-    const I = (x, y) => y * width + x;
-    for (let y = 0; y < height; y++) {
-      let bit = 7;
-      let cur = 0;
-      for (let x = 0; x < width; x++) {
-        const p = pixels[I(x, y)];
-        const on = p.a > 0 && (p.r + p.g + p.b) > (255 * 3) / 2; // lighter pixel → 1 (white = on)
-        if (on) cur |= 1 << bit;
-        bit--;
-        if (bit < 0) {
-          bytes.push(cur);
-          cur = 0;
-          bit = 7;
-        }
-      }
-      if (bit !== 7) bytes.push(cur); // flush partial byte per row
-    }
-    return bytes;
-  };
-
-  const packRGB565 = (pixels, width, height) => {
-    const out = [];
-    const I = (x, y) => y * width + x;
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const p = pixels[I(x, y)];
-        out.push(p.a < 10 ? 0 : rgbTo565(p.r, p.g, p.b));
-      }
-    }
-    return out;
-  };
-
-  const packBMP = (pixels, width, height) => {
-    const out = [];
-    const I = (x, y) => y * width + x;
-    // BMP format: bottom-up, BGR color order
-    for (let y = height - 1; y >= 0; y--) {
-      for (let x = 0; x < width; x++) {
-        const p = pixels[I(x, y)];
-        if (p.a < 10) {
-          // Transparent pixel - use black
-          out.push(0, 0, 0);
-        } else {
-          // BMP uses BGR order
-          out.push(p.b, p.g, p.r);
-        }
-      }
-      // Add padding to make row length multiple of 4
-      const padding = (4 - ((width * 3) % 4)) % 4;
-      for (let i = 0; i < padding; i++) {
-        out.push(0);
-      }
-    }
-    return out;
-  };
+  // Export helpers moved to lib/packers.js
 
   const generateCppCode = () => {
     const safeName = name.replace(/[^a-zA-Z0-9_]/g, "_");
@@ -343,9 +216,9 @@ void loop(){}`;
     } else if (mode === "RGB565") {
       const words = packRGB565(data, w, h);
       const wordStr = words.map(hex565).join(", ");
-      return `// Generated by Pixel2CPP (RGB565)
-#include <Arduino.h>
-#include <avr/pgmspace.h>
+      return `// Generated by Pixel2CPP (RGB565 for TFT displays)
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7735.h>  // Use ST7789, ILI9341, etc. for your display
 
 const uint16_t ${safeName}_w = ${w};
 const uint16_t ${safeName}_h = ${h};
@@ -353,184 +226,219 @@ const uint16_t ${safeName}_pixels[] PROGMEM = {
   ${wordStr}
 };
 
-/* Example draw (Adafruit_GFX):
-  for (uint16_t y=0; y<${safeName}_h; y++) {
-    tft.startWrite();
-    tft.setAddrWindow(x, y0 + y, ${safeName}_w, 1);
-    for (uint16_t x0=0; x0<${safeName}_w; x0++) {
-      uint16_t c = pgm_read_word(&${safeName}_pixels[y*${safeName}_w + x0]);
-      tft.writePixel(c);
-    }
-    tft.endWrite();
-  }
-*/`;
-    } else if (mode === "BMP") {
-      const bmpData = packBMP(data, w, h);
-      const byteStr = bmpData.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
-      const dataSize = bmpData.length;
-      const fileSize = 54 + dataSize; // 54 bytes header + data
-      const headerSize = 40; // BITMAPINFOHEADER size
-      const planes = 1;
-      const bitsPerPixel = 24;
-      const compression = 0; // BI_RGB
-      const imageSize = dataSize;
-      const xPixelsPerM = 2835; // 72 DPI
-      const yPixelsPerM = 2835; // 72 DPI
-      const colorsUsed = 0;
-      const importantColors = 0;
-      
-      const boardSpecificCode = board === "ESP8266" ? `// Generated by Pixel2CPP (BMP format for ${board})
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
-#include <avr/pgmspace.h>` : 
-      board === "ESP32" ? `// Generated by Pixel2CPP (BMP format for ${board})
-#include <WiFi.h>
-#include <WebServer.h>
-#include <avr/pgmspace.h>` :
-      `// Generated by Pixel2CPP (BMP format for ${board})
-#include <Arduino.h>
-#include <avr/pgmspace.h>`;
+// Define pins for your display (adjust for your setup)
+#define TFT_CS   10
+#define TFT_RST  9
+#define TFT_DC   8
 
-      return `${boardSpecificCode}
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
-// BMP Header (54 bytes)
-const uint8_t ${safeName}_bmp_header[] PROGMEM = {
-  // File header (14 bytes)
-  0x42, 0x4D, // Signature "BM"
-  ${(fileSize & 0xFF)}, ${((fileSize >> 8) & 0xFF)}, ${((fileSize >> 16) & 0xFF)}, ${((fileSize >> 24) & 0xFF)}, // File size
-  0x00, 0x00, // Reserved
-  0x00, 0x00, // Reserved
-  0x36, 0x00, 0x00, 0x00, // Data offset (54 bytes)
-  
-  // Info header (40 bytes)
-  ${(headerSize & 0xFF)}, ${((headerSize >> 8) & 0xFF)}, ${((headerSize >> 16) & 0xFF)}, ${((headerSize >> 24) & 0xFF)}, // Header size
-  ${(w & 0xFF)}, ${((w >> 8) & 0xFF)}, ${((w >> 16) & 0xFF)}, ${((w >> 24) & 0xFF)}, // Width
-  ${(h & 0xFF)}, ${((h >> 8) & 0xFF)}, ${((h >> 16) & 0xFF)}, ${((h >> 24) & 0xFF)}, // Height
-  ${(planes & 0xFF)}, ${((planes >> 8) & 0xFF)}, // Planes
-  ${(bitsPerPixel & 0xFF)}, ${((bitsPerPixel >> 8) & 0xFF)}, // Bits per pixel
-  ${(compression & 0xFF)}, ${((compression >> 8) & 0xFF)}, ${((compression >> 16) & 0xFF)}, ${((compression >> 24) & 0xFF)}, // Compression
-  ${(imageSize & 0xFF)}, ${((imageSize >> 8) & 0xFF)}, ${((imageSize >> 16) & 0xFF)}, ${((imageSize >> 24) & 0xFF)}, // Image size
-  ${(xPixelsPerM & 0xFF)}, ${((xPixelsPerM >> 8) & 0xFF)}, ${((xPixelsPerM >> 16) & 0xFF)}, ${((xPixelsPerM >> 24) & 0xFF)}, // X pixels per meter
-  ${(yPixelsPerM & 0xFF)}, ${((yPixelsPerM >> 8) & 0xFF)}, ${((yPixelsPerM >> 16) & 0xFF)}, ${((yPixelsPerM >> 24) & 0xFF)}, // Y pixels per meter
-  ${(colorsUsed & 0xFF)}, ${((colorsUsed >> 8) & 0xFF)}, ${((colorsUsed >> 16) & 0xFF)}, ${((colorsUsed >> 24) & 0xFF)}, // Colors used
-  ${(importantColors & 0xFF)}, ${((importantColors >> 8) & 0xFF)}, ${((importantColors >> 16) & 0xFF)}, ${((importantColors >> 24) & 0xFF)} // Important colors
-};
-
-// BMP Image data (${dataSize} bytes)
-const uint8_t ${safeName}_bmp_data[] PROGMEM = {
-  ${byteStr}
-};
-
-const uint16_t ${safeName}_w = ${w};
-const uint16_t ${safeName}_h = ${h};
-const uint32_t ${safeName}_data_size = ${dataSize};
-
-/* Example usage for ${board}:
-${board === "ESP8266" ? `// ESP8266 Web Server Example
-ESP8266WebServer server(80);
-
-void setup() {
-  Serial.begin(115200);
-  
-  // Connect to WiFi
-  WiFi.begin("your_ssid", "your_password");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.println("WiFi connected");
-  Serial.println("IP address: " + WiFi.localIP().toString());
-  
-  // Setup web server routes
-  server.on("/bmp", handleBMP);
-  server.begin();
-}
-
-void loop() {
-  server.handleClient();
-}
-
-void handleBMP() {
-  server.setHeader("Content-Type", "image/bmp");
-  server.setHeader("Content-Disposition", "inline; filename=${safeName}.bmp");
-  
-  // Send BMP header
-  for (int i = 0; i < 54; i++) {
-    server.client().write(pgm_read_byte(&${safeName}_bmp_header[i]));
-  }
-  // Send BMP data
-  for (int i = 0; i < ${safeName}_data_size; i++) {
-    server.client().write(pgm_read_byte(&${safeName}_bmp_data[i]));
-  }
-}` : 
-board === "ESP32" ? `// ESP32 Web Server Example
-WebServer server(80);
-
-void setup() {
-  Serial.begin(115200);
-  
-  // Connect to WiFi
-  WiFi.begin("your_ssid", "your_password");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.println("WiFi connected");
-  Serial.println("IP address: " + WiFi.localIP().toString());
-  
-  // Setup web server routes
-  server.on("/bmp", handleBMP);
-  server.begin();
-}
-
-void loop() {
-  server.handleClient();
-}
-
-void handleBMP() {
-  server.setHeader("Content-Type", "image/bmp");
-  server.setHeader("Content-Disposition", "inline; filename=${safeName}.bmp");
-  
-  // Send BMP header
-  for (int i = 0; i < 54; i++) {
-    server.write(pgm_read_byte(&${safeName}_bmp_header[i]));
-  }
-  // Send BMP data
-  for (int i = 0; i < ${safeName}_data_size; i++) {
-    server.write(pgm_read_byte(&${safeName}_bmp_data[i]));
-  }
-}` :
-`// Arduino Example - Copy image data to Serial
 void setup() {
   Serial.begin(9600);
   
-  // Print BMP header
-  Serial.println("BMP Header:");
-  for (int i = 0; i < 54; i++) {
-    Serial.print("0x");
-    Serial.print(pgm_read_byte(&${safeName}_bmp_header[i]), HEX);
-    Serial.print(", ");
-    if ((i + 1) % 16 == 0) Serial.println();
-  }
-  Serial.println();
+  // Initialize display
+  tft.initR(INITR_BLACKTAB);  // Use INITR_GREENTAB, INITR_REDTAB for other variants
+  tft.setRotation(0);         // Adjust rotation as needed (0-3)
+  tft.fillScreen(ST77XX_BLACK);
   
-  // Print BMP data
-  Serial.println("BMP Data:");
-  for (int i = 0; i < ${safeName}_data_size; i++) {
-    Serial.print("0x");
-    Serial.print(pgm_read_byte(&${safeName}_bmp_data[i]), HEX);
-    Serial.print(", ");
-    if ((i + 1) % 16 == 0) Serial.println();
-  }
-  Serial.println();
-  Serial.println("Image dimensions: " + String(${safeName}_w) + "x" + String(${safeName}_h));
+  // Display the image at position (0, 0)
+  drawImage(0, 0);
 }
 
 void loop() {
   // Your main code here
-}`}
+}
+
+void drawImage(int16_t x0, int16_t y0) {
+  // Fast method: set address window and write pixels directly
+  tft.startWrite();
+  tft.setAddrWindow(x0, y0, ${safeName}_w, ${safeName}_h);
+  
+  for (uint16_t i = 0; i < ${safeName}_w * ${safeName}_h; i++) {
+    uint16_t color = pgm_read_word(&${safeName}_pixels[i]);
+    tft.writePixel(color);
+  }
+  
+  tft.endWrite();
+}
+
+/* Alternative method (slower but more flexible):
+void drawImagePixelByPixel(int16_t x0, int16_t y0) {
+  for (uint16_t y = 0; y < ${safeName}_h; y++) {
+    for (uint16_t x = 0; x < ${safeName}_w; x++) {
+      uint16_t color = pgm_read_word(&${safeName}_pixels[y * ${safeName}_w + x]);
+      tft.drawPixel(x0 + x, y0 + y, color);
+    }
+  }
+}
+*/`;
+    } else if (mode === "RGB24") {
+      const bytes = packRGB24(data, w, h);
+      const byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
+      return `// Generated by Pixel2CPP (RGB24 for ESP32/high-memory displays)
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>  // Use appropriate display library
+
+const uint16_t ${safeName}_w = ${w};
+const uint16_t ${safeName}_h = ${h};
+const uint8_t ${safeName}_pixels[] PROGMEM = {
+  ${byteStr}
+};
+
+// Define pins for your display
+#define TFT_CS   10
+#define TFT_RST  9
+#define TFT_DC   8
+
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Initialize display
+  tft.begin();
+  tft.setRotation(0);
+  tft.fillScreen(ILI9341_BLACK);
+  
+  // Display the image
+  drawImage(0, 0);
+}
+
+void loop() {
+  // Your main code here
+}
+
+void drawImage(int16_t x0, int16_t y0) {
+  // Convert RGB24 to RGB565 on the fly for display
+  for (uint16_t y = 0; y < ${safeName}_h; y++) {
+    for (uint16_t x = 0; x < ${safeName}_w; x++) {
+      uint16_t index = (y * ${safeName}_w + x) * 3;
+      uint8_t r = pgm_read_byte(&${safeName}_pixels[index]);
+      uint8_t g = pgm_read_byte(&${safeName}_pixels[index + 1]);
+      uint8_t b = pgm_read_byte(&${safeName}_pixels[index + 2]);
+      
+      // Convert to RGB565
+      uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+      tft.drawPixel(x0 + x, y0 + y, color);
+    }
+  }
+}`;
+    } else if (mode === "RGB332") {
+      const bytes = packRGB332(data, w, h);
+      const byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
+      return `// Generated by Pixel2CPP (RGB332 for low-memory/retro displays)
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1331.h>  // Or other 8-bit color displays
+
+const uint16_t ${safeName}_w = ${w};
+const uint16_t ${safeName}_h = ${h};
+const uint8_t ${safeName}_pixels[] PROGMEM = {
+  ${byteStr}
+};
+
+// Define pins for your display
+#define OLED_CS   10
+#define OLED_RST  9
+#define OLED_DC   8
+
+Adafruit_SSD1331 display = Adafruit_SSD1331(OLED_CS, OLED_DC, OLED_RST);
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Initialize display
+  display.begin();
+  display.fillScreen(0x00);
+  
+  // Display the image
+  drawImage(0, 0);
+}
+
+void loop() {
+  // Your main code here
+}
+
+void drawImage(int16_t x0, int16_t y0) {
+  for (uint16_t y = 0; y < ${safeName}_h; y++) {
+    for (uint16_t x = 0; x < ${safeName}_w; x++) {
+      uint8_t color332 = pgm_read_byte(&${safeName}_pixels[y * ${safeName}_w + x]);
+      display.drawPixel(x0 + x, y0 + y, color332);
+    }
+  }
+}
+
+/* Color conversion reference:
+   RGB332: RRRGGGBB (8-bit)
+   - Red: 3 bits (0-7) 
+   - Green: 3 bits (0-7)
+   - Blue: 2 bits (0-3)
+*/`;
+    } else if (mode === "GRAY4") {
+      const bytes = packGray4(data, w, h);
+      const byteStr = bytes.map((b) => "0x" + b.toString(16).toUpperCase().padStart(2, "0")).join(", ");
+      return `// Generated by Pixel2CPP (4-bit Grayscale for E-ink/EPD)
+#include <Adafruit_GFX.h>
+#include <Adafruit_EPD.h>  // Use appropriate e-ink library
+
+const uint16_t ${safeName}_w = ${w};
+const uint16_t ${safeName}_h = ${h};
+const uint8_t ${safeName}_pixels[] PROGMEM = {
+  ${byteStr}
+};
+
+// Define pins for your e-ink display
+#define EPD_CS     10
+#define EPD_DC     8
+#define EPD_RESET  9
+#define EPD_BUSY   7
+
+// Adafruit_IL0373 display(152, 152, EPD_DC, EPD_RESET, EPD_CS, SRAM_CS, EPD_BUSY);
+
+void setup() {
+  Serial.begin(9600);
+  
+  // Initialize e-ink display
+  // display.begin();
+  // display.clearBuffer();
+  
+  // Display the image
+  drawGrayImage(0, 0);
+}
+
+void loop() {
+  // E-ink displays typically don't need continuous refresh
+}
+
+void drawGrayImage(int16_t x0, int16_t y0) {
+  // Extract 4-bit grayscale values and display
+  for (uint16_t y = 0; y < ${safeName}_h; y++) {
+    for (uint16_t x = 0; x < ${safeName}_w; x++) {
+      uint16_t byteIndex = (y * ${safeName}_w + x) / 2;
+      uint8_t packedByte = pgm_read_byte(&${safeName}_pixels[byteIndex]);
+      
+      uint8_t grayValue;
+      if (x % 2 == 0) {
+        grayValue = (packedByte >> 4) & 0x0F; // High nibble
+      } else {
+        grayValue = packedByte & 0x0F; // Low nibble
+      }
+      
+      // Convert 4-bit (0-15) to 8-bit (0-255) for display
+      uint8_t gray8 = grayValue * 17; // 15 * 17 = 255
+      
+      // Use appropriate display function for your e-ink library
+      // display.drawPixel(x0 + x, y0 + y, gray8);
+    }
+  }
+  
+  // display.display(); // Refresh e-ink display
+}
+
+/* 4-bit Grayscale format:
+   Each byte contains 2 pixels: AAAABBBB
+   - High nibble (AAAA): First pixel grayscale (0-15)
+   - Low nibble (BBBB): Second pixel grayscale (0-15)
+   - 0 = Black, 15 = White
 */`;
     }
   };
@@ -601,7 +509,7 @@ void loop() {
       results.push({ name: "RGB565 R,G,B", pass: JSON.stringify(words) === JSON.stringify(expect), got: words, expect });
     }
 
-    // Test 4: BMP format - 2x2 image with RGB colors
+    // Test 4: RGB24 format - 2x2 image with RGB colors
     {
       const tw = 2, th = 2;
       const px = [
@@ -610,19 +518,48 @@ void loop() {
         { r: 0, g: 0, b: 255, a: 255 },     // Blue
         { r: 255, g: 255, b: 255, a: 255 }, // White
       ];
-      const bmpData = packBMP(px, tw, th);
-      // BMP is bottom-up, so rows are reversed
-      // Row 1 (bottom): Blue, White (BGR order) + 2 bytes padding
-      // Row 2 (top): Red, Green (BGR order) + 2 bytes padding
+      const rgb24Data = packRGB24(px, tw, th);
       const expect = [
-        255, 0, 0,    // Blue (B=255, G=0, R=0)
-        255, 255, 255, // White (B=255, G=255, R=255)
-        0, 0,         // Padding for 4-byte alignment
-        0, 0, 255,    // Red (B=0, G=0, R=255)
-        0, 255, 0,    // Green (B=0, G=255, R=0)
-        0, 0          // Padding for 4-byte alignment
+        255, 0, 0,    // Red (R=255, G=0, B=0)
+        0, 255, 0,    // Green (R=0, G=255, B=0)
+        0, 0, 255,    // Blue (R=0, G=0, B=255)
+        255, 255, 255 // White (R=255, G=255, B=255)
       ];
-      results.push({ name: "BMP 2x2 RGB", pass: JSON.stringify(bmpData) === JSON.stringify(expect), got: bmpData, expect });
+      results.push({ name: "RGB24 2x2 colors", pass: JSON.stringify(rgb24Data) === JSON.stringify(expect), got: rgb24Data, expect });
+    }
+
+    // Test 5: RGB332 format - primary colors
+    {
+      const tw = 3, th = 1;
+      const px = [
+        { r: 255, g: 0, b: 0, a: 255 },     // Red
+        { r: 0, g: 255, b: 0, a: 255 },     // Green
+        { r: 0, g: 0, b: 255, a: 255 },     // Blue
+      ];
+      const rgb332Data = packRGB332(px, tw, th);
+      const expect = [
+        0xE0,  // Red: 111 000 00 (R=7, G=0, B=0)
+        0x1C,  // Green: 000 111 00 (R=0, G=7, B=0)
+        0x03   // Blue: 000 000 11 (R=0, G=0, B=3)
+      ];
+      results.push({ name: "RGB332 R,G,B", pass: JSON.stringify(rgb332Data) === JSON.stringify(expect), got: rgb332Data, expect });
+    }
+
+    // Test 6: GRAY4 format - grayscale values
+    {
+      const tw = 4, th = 1;
+      const px = [
+        { r: 0, g: 0, b: 0, a: 255 },       // Black (0)
+        { r: 85, g: 85, b: 85, a: 255 },    // Dark gray (~5)
+        { r: 170, g: 170, b: 170, a: 255 }, // Light gray (~10)
+        { r: 255, g: 255, b: 255, a: 255 }, // White (15)
+      ];
+      const gray4Data = packGray4(px, tw, th);
+      const expect = [
+        0x05,  // First byte: 0000 0101 (black=0, dark gray=5)
+        0xAF   // Second byte: 1010 1111 (light gray=10, white=15)
+      ];
+      results.push({ name: "GRAY4 grayscale", pass: JSON.stringify(gray4Data) === JSON.stringify(expect), got: gray4Data, expect });
     }
 
     setTestResults(results);
@@ -632,11 +569,11 @@ void loop() {
 
   // ---------- UI ----------
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 p-2 sm:p-4">
-      <div className="max-w-7xl mx-auto space-y-4">
-        <header className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="min-h-screen bg-neutral-950 text-neutral-100">
+      <div className="flex flex-col h-screen">
+        <header className="flex items-center justify-between gap-4 px-3 sm:px-4 py-3 border-b border-neutral-800">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Pixel2CPP — Pixel Editor → C++ Export</h1>
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
+          <div className="flex items-center gap-2 sm:gap-3">
             <input 
               className="bg-neutral-800 rounded px-3 py-1 outline-none text-sm" 
               value={name} 
@@ -644,81 +581,74 @@ void loop() {
               title="Asset name" 
               placeholder="Asset name"
             />
-            <div className="flex gap-2">
-              <label className="px-3 py-1.5 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 cursor-pointer text-sm">
-                Upload Image
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) importImage(f); }} 
-                  className="hidden"
-                />
-              </label>
-              <button 
-                onClick={handleGenerateCode} 
-                disabled={isGenerating}
-                className="px-3 py-1.5 rounded-xl bg-blue-500 text-white font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              >
-                {isGenerating ? "Generating..." : "Generate Code"}
-              </button>
-              <button 
-                onClick={exportCpp} 
-                className="px-3 py-1.5 rounded-xl bg-emerald-500 text-black font-medium hover:brightness-110 text-sm"
-              >
-                Export .h
-              </button>
-            </div>
+            <label className="px-3 py-1.5 rounded-xl bg-purple-500 text-white font-medium hover:bg-purple-600 cursor-pointer text-sm">
+              Upload Image
+              <input 
+                type="file" 
+                accept="image/*" 
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) importImage(f); }} 
+                className="hidden"
+              />
+            </label>
+            <button 
+              onClick={handleGenerateCode} 
+              disabled={isGenerating}
+              className="px-3 py-1.5 rounded-xl bg-blue-500 text-white font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            >
+              {isGenerating ? "Generating..." : "Generate Code"}
+            </button>
+            <button 
+              onClick={exportCpp} 
+              className="px-3 py-1.5 rounded-xl bg-emerald-500 text-black font-medium hover:brightness-110 text-sm"
+            >
+              Export .h
+            </button>
           </div>
         </header>
 
-        {/* Controls */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          <div className="bg-neutral-900 rounded-2xl p-3 space-y-3">
-            <h2 className="font-medium">Canvas</h2>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <label className="flex items-center gap-2">W
-                <input type="number" min={1} max={256} value={w} onChange={(e) => setW(clamp(parseInt(e.target.value) || 1, 1, 256))} className="w-16 bg-neutral-800 rounded px-2 py-1" />
-              </label>
-              <label className="flex items-center gap-2">H
-                <input type="number" min={1} max={256} value={h} onChange={(e) => setH(clamp(parseInt(e.target.value) || 1, 1, 256))} className="w-16 bg-neutral-800 rounded px-2 py-1" />
-              </label>
-              <label className="flex items-center gap-2">Zoom
-                <input type="range" min={4} max={32} value={zoom} onChange={(e) => setZoom(parseInt(e.target.value))} className="w-20" />
-              </label>
-              <div className="flex flex-wrap gap-2">
-                <label className="flex items-center gap-1"><input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />Grid</label>
-                <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorX} onChange={(e) => setMirrorX(e.target.checked)} />Mirror X</label>
-                <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorY} onChange={(e) => setMirrorY(e.target.checked)} />Mirror Y</label>
-              </div>
-              <select value={mode} onChange={(e) => setMode(e.target.value)} className="bg-neutral-800 rounded px-2 py-1 text-sm">
-                <option value="1BIT">1-bit (OLED/SSD1306)</option>
-                <option value="RGB565">RGB565 (TFT)</option>
-                <option value="BMP">BMP (ESP8266/ESP32)</option>
-              </select>
-              {mode === "BMP" && (
-                <select value={board} onChange={(e) => setBoard(e.target.value)} className="bg-neutral-800 rounded px-2 py-1 text-sm">
-                  <option value="ESP8266">ESP8266</option>
-                  <option value="ESP32">ESP32</option>
-                  <option value="Arduino">Arduino</option>
+        <div className="flex flex-1 min-h-0">
+          {/* Sidebar */}
+          <aside className="w-80 min-w-[16rem] max-w-[22rem] bg-neutral-900 border-r border-neutral-800 p-3 space-y-3 overflow-y-auto">
+            <div className="space-y-3">
+              <h2 className="font-medium">Canvas</h2>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <label className="flex items-center gap-2">W
+                  <input type="number" min={1} max={256} value={w} onChange={(e) => setW(clamp(parseInt(e.target.value) || 1, 1, 256))} className="w-16 bg-neutral-800 rounded px-2 py-1" />
+                </label>
+                <label className="flex items-center gap-2">H
+                  <input type="number" min={1} max={256} value={h} onChange={(e) => setH(clamp(parseInt(e.target.value) || 1, 1, 256))} className="w-16 bg-neutral-800 rounded px-2 py-1" />
+                </label>
+                <label className="flex items-center gap-2">Zoom
+                  <input type="range" min={4} max={32} value={zoom} onChange={(e) => setZoom(parseInt(e.target.value))} className="w-24" />
+                </label>
+                <div className="flex flex-wrap gap-2 w-full">
+                  <label className="flex items-center gap-1"><input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />Grid</label>
+                  <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorX} onChange={(e) => setMirrorX(e.target.checked)} />Mirror X</label>
+                  <label className="flex items-center gap-1"><input type="checkbox" checked={mirrorY} onChange={(e) => setMirrorY(e.target.checked)} />Mirror Y</label>
+                </div>
+                <select value={mode} onChange={(e) => setMode(e.target.value)} className="bg-neutral-800 rounded px-2 py-1 text-sm">
+                  <option value="1BIT">1-bit (SSD1306 OLED)</option>
+                  <option value="RGB565">RGB565 (ST7735/ILI9341 TFT)</option>
+                  <option value="RGB24">RGB24 (ESP32/High Memory)</option>
+                  <option value="RGB332">RGB332 (SSD1331/Low Memory)</option>
+                  <option value="GRAY4">4-bit Grayscale (E-ink/EPD)</option>
                 </select>
-              )}
-              <div className="flex gap-2">
-                <button onClick={clearCanvas} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Clear</button>
-                <button onClick={() => { if (canUndo) setRedo((r) => [data.map(p=>({...p})), ...r]); if (canUndo) { const last = history[history.length - 1]; setHistory((h) => h.slice(0, -1)); setData(last.map(p => ({ ...p }))); } }} disabled={!canUndo} className={`px-3 py-1.5 rounded-xl text-sm ${canUndo ? "bg-neutral-800 hover:bg-neutral-700" : "bg-neutral-900 opacity-50"}`}>Undo</button>
-                <button onClick={() => { if (!canRedo) return; const [next, ...rest] = redo; setHistory((h) => [...h, data.map(p=>({...p}))]); setData(next.map(p => ({ ...p }))); setRedo(rest); }} disabled={!canRedo} className={`px-3 py-1.5 rounded-xl text-sm ${canRedo ? "bg-neutral-800 hover:bg-neutral-700" : "bg-neutral-900 opacity-50"}`}>Redo</button>
+                <div className="flex gap-2 w-full">
+                  <button onClick={clearCanvas} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Clear</button>
+                  <button onClick={() => { if (canUndo) setRedo((r) => [data.map(p=>({...p})), ...r]); if (canUndo) { const last = history[history.length - 1]; setHistory((h) => h.slice(0, -1)); setData(last.map(p => ({ ...p }))); } }} disabled={!canUndo} className={`px-3 py-1.5 rounded-xl text-sm ${canUndo ? "bg-neutral-800 hover:bg-neutral-700" : "bg-neutral-900 opacity-50"}`}>Undo</button>
+                  <button onClick={() => { if (!canRedo) return; const [next, ...rest] = redo; setHistory((h) => [...h, data.map(p=>({...p}))]); setData(next.map(p => ({ ...p }))); setRedo(rest); }} disabled={!canRedo} className={`px-3 py-1.5 rounded-xl text-sm ${canRedo ? "bg-neutral-800 hover:bg-neutral-700" : "bg-neutral-900 opacity-50"}`}>Redo</button>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="bg-neutral-900 rounded-2xl p-3 space-y-3">
-            <h2 className="font-medium">Tools</h2>
-            <div className="flex flex-wrap gap-2">
-              {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
-                <button key={k} onClick={() => setTool(k)} className={`px-3 py-1.5 rounded-xl text-sm ${tool === k ? "bg-emerald-500 text-black" : "bg-neutral-800 hover:bg-neutral-700"}`}>{k}</button>
-              ))}
-            </div>
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-              <div className="flex items-center gap-2">
+            <div className="space-y-3">
+              <h2 className="font-medium">Tools</h2>
+              <div className="flex flex-wrap gap-2">
+                {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
+                  <button key={k} onClick={() => setTool(k)} className={`px-3 py-1.5 rounded-xl text-sm ${tool === k ? "bg-emerald-500 text-black" : "bg-neutral-800 hover:bg-neutral-700"}`}>{k}</button>
+                ))}
+              </div>
+              <div className="flex items-center gap-3">
                 <div>
                   <div className="text-xs opacity-70">Primary</div>
                   <input type="color" value={rgbaToHex(primary)} onChange={(e) => setPrimary(parseCssColor(e.target.value))} className="w-10 h-8 bg-neutral-800 rounded" />
@@ -730,53 +660,208 @@ void loop() {
                 <button onClick={swapColors} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Swap</button>
               </div>
               <div className="text-sm opacity-80">Mode: <span className="font-mono">{mode}</span></div>
+              <div className="text-xs opacity-70">Tip: Right‑click draws with Secondary. Eyedropper picks Primary from canvas.</div>
             </div>
-            <div className="text-xs opacity-70">Tip: Right‑click draws with Secondary. Eyedropper picks Primary from canvas.</div>
-          </div>
+          </aside>
 
-
-        </div>
-
-        {/* Canvas */}
-        <div className="bg-neutral-900 rounded-2xl p-4 overflow-auto">
-          <div
-            data-canvas
-            ref={canvasRef}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={() => { isMouseDown.current = false; }}
-            onContextMenu={(e) => { e.preventDefault(); }}
-            className="inline-block"
-            style={{
-              width: w * zoom,
-              height: h * zoom,
-              background: "transparent",
-              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
-              position: "relative",
-              imageRendering: "pixelated",
-              cursor: tool === "eyedropper" ? "crosshair" : "pointer",
-            }}
-          >
-            {/* pixels */}
-            <div className="absolute inset-0 grid" style={{ gridTemplateColumns: `repeat(${w}, 1fr)` }}>
-              {data.map((p, i) => (
-                <div
-                  key={i}
-                  style={{ width: zoom, height: zoom, background: p.a === 0 ? "transparent" : pixelToCss(p) }}
-                />
+          {/* Main */}
+          <main className="flex-1 min-w-0 flex flex-col">
+            <nav className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">
+              {(["Editor", "Snippets", "Tests"]).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-3 py-1.5 rounded-xl text-sm ${activeTab === tab ? 'bg-neutral-800' : 'hover:bg-neutral-900'}`}
+                >{tab}</button>
               ))}
-            </div>
-            {/* grid overlay */}
-            {showGrid && (
-              <div className="absolute inset-0 pointer-events-none" style={{
-                backgroundSize: `${zoom}px ${zoom}px`,
-                backgroundImage: `linear-gradient(to right, rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.06) 1px, transparent 1px)`
-              }} />
-            )}
-          </div>
-        </div>
+            </nav>
+            <div className="flex-1 min-h-0 p-3 overflow-auto">
+              {activeTab === 'Editor' && (
+                <div className="bg-neutral-900 rounded-2xl p-4 overflow-auto inline-block">
+                  <PixelCanvas
+                    width={w}
+                    height={h}
+                    zoom={zoom}
+                    pixels={data}
+                    showGrid={showGrid}
+                    cursor={tool === "eyedropper" ? "crosshair" : "pointer"}
+                    onPointerDown={handleMouseDown}
+                    onPointerMove={handleMouseMove}
+                    onPointerUp={handleMouseUp}
+                  />
+                </div>
+              )}
 
+              {activeTab === 'Snippets' && (
+                <div className="space-y-3">
+                  <div className="bg-neutral-900 rounded-2xl p-4 space-y-3">
+                    <h2 className="font-medium">Arduino usage snippets</h2>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// 1-bit (SSD1306 OLED)
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
+
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+void setup(){
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.drawBitmap(0, 0, ${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bits, ${w}, ${h}, 1);
+  display.display();
+}
+
+void loop(){}`}</pre>
+
+                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// RGB565 (ST7735/ILI9341 TFT)
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7735.h>
+#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
+
+#define TFT_CS   10
+#define TFT_RST  9  
+#define TFT_DC   8
+
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+
+void setup(){
+  tft.initR(INITR_BLACKTAB);
+  tft.fillScreen(ST77XX_BLACK);
+  drawImage(0, 0);
+}
+
+void drawImage(int16_t x0, int16_t y0) {
+  tft.startWrite();
+  tft.setAddrWindow(x0, y0, ${w}, ${h});
+  for (uint16_t i = 0; i < ${w} * ${h}; i++) {
+    uint16_t color = pgm_read_word(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[i]);
+    tft.writePixel(color);
+  }
+  tft.endWrite();
+}
+
+void loop(){}`}</pre>
+
+                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// RGB24 (ESP32/High Memory)
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>
+#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
+
+Adafruit_ILI9341 tft = Adafruit_ILI9341(10, 8, 9);
+
+void setup(){
+  tft.begin();
+  tft.fillScreen(ILI9341_BLACK);
+  drawImage(0, 0);
+}
+
+void drawImage(int16_t x0, int16_t y0) {
+  for (uint16_t y = 0; y < ${h}; y++) {
+    for (uint16_t x = 0; x < ${w}; x++) {
+      uint16_t index = (y * ${w} + x) * 3;
+      uint8_t r = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[index]);
+      uint8_t g = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[index + 1]);
+      uint8_t b = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[index + 2]);
+      uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+      tft.drawPixel(x0 + x, y0 + y, color);
+    }
+  }
+}
+
+void loop(){}`}</pre>
+
+                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// RGB332 (SSD1331/Low Memory)
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1331.h>
+#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
+
+Adafruit_SSD1331 display = Adafruit_SSD1331(10, 8, 9);
+
+void setup(){
+  display.begin();
+  display.fillScreen(0x00);
+  drawImage(0, 0);
+}
+
+void drawImage(int16_t x0, int16_t y0) {
+  for (uint16_t y = 0; y < ${h}; y++) {
+    for (uint16_t x = 0; x < ${w}; x++) {
+      uint8_t color332 = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[y * ${w} + x]);
+      display.drawPixel(x0 + x, y0 + y, color332);
+    }
+  }
+}
+
+// RGB332: RRRGGGBB (8-bit color)
+void loop(){}`}</pre>
+
+                      <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// 4-bit Grayscale (E-ink/EPD)
+#include <Adafruit_GFX.h>
+#include <Adafruit_EPD.h>
+#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
+
+// Adafruit_IL0373 display(152, 152, 8, 9, 10, 11, 7);
+
+void setup(){
+  // display.begin();
+  // display.clearBuffer();
+  drawGrayImage(0, 0);
+  // display.display();
+}
+
+void drawGrayImage(int16_t x0, int16_t y0) {
+  for (uint16_t y = 0; y < ${h}; y++) {
+    for (uint16_t x = 0; x < ${w}; x++) {
+      uint16_t byteIndex = (y * ${w} + x) / 2;
+      uint8_t packedByte = pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[byteIndex]);
+      uint8_t grayValue = (x % 2 == 0) ? (packedByte >> 4) : (packedByte & 0x0F);
+      uint8_t gray8 = grayValue * 17;
+      // display.drawPixel(x0 + x, y0 + y, gray8);
+    }
+  }
+}
+
+// 4-bit grayscale: 2 pixels per byte
+void loop(){}`}</pre>
+                    </div>
+                  </div>
+
+
+                </div>
+              )}
+
+              {activeTab === 'Tests' && (
+                <div className="bg-neutral-900 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-medium">Built-in Tests</h2>
+                    <button onClick={runTests} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Run Tests</button>
+                  </div>
+                  {testResults.length > 0 && (
+                    <div className="space-y-2 text-sm">
+                      {testResults.map((t, i) => (
+                        <div key={i} className={`${t.pass ? 'bg-emerald-900/30 text-emerald-300' : 'bg-rose-900/30 text-rose-300'} p-2 rounded-xl`}>
+                          <div className="font-medium">{t.pass ? 'PASS' : 'FAIL'} — {t.name}</div>
+                          {!t.pass && (
+                            <div className="opacity-70 font-mono">
+                              got: {JSON.stringify(t.got)}; expected: {JSON.stringify(t.expect)}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <div className={`${testsPassed ? 'bg-emerald-800/30 text-emerald-200' : 'bg-rose-800/30 text-rose-200'} p-2 rounded-xl`}>
+                        Overall: {testsPassed ? '✅ All tests passed' : '❌ Some tests failed'}
+                      </div>
+                    </div>
+                  )}
+                  {testResults.length === 0 && (
+                    <div className="text-xs opacity-70">Click "Run Tests" to validate 1‑bit, RGB565, RGB24, RGB332, and 4‑bit grayscale format conversions.</div>
+                  )}
+                </div>
+              )}
+            </div>
+            <footer className="text-xs opacity-60 text-center py-2 border-t border-neutral-800">Made for makers. No tracking, all local. ✨</footer>
+          </main>
+        </div>
         {/* Code Modal */}
         {showCodeModal && (
           <div className="fixed inset-0 bg-black bg-opacity-50 modal-backdrop flex items-center justify-center p-4 z-50">
@@ -812,209 +897,6 @@ void loop() {
             </div>
           </div>
         )}
-
-        {/* Snippets */}
-        <div className="bg-neutral-900 rounded-2xl p-4 space-y-3">
-          <h2 className="font-medium">Arduino usage snippets</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// 1-bit (SSD1306 OLED 128x64)
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
-
-void setup(){
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  display.clearDisplay();
-  display.drawBitmap(0, 0, ${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bits, ${w}, ${h}, 1);
-  display.display();
-}
-
-void loop(){}`}</pre>
-
-            <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// RGB565 (e.g., ST7735/ILI9341 TFT)
-#include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-Adafruit_ILI9341 tft = Adafruit_ILI9341(10, 9); // example pins
-
-void setup(){
-  tft.begin();
-  tft.fillScreen(ILI9341_BLACK);
-  for (uint16_t y=0; y<${h}; y++) {
-    tft.startWrite();
-    tft.setAddrWindow(0, y, ${w}, 1);
-    for (uint16_t x=0; x<${w}; x++) {
-      uint16_t c = pgm_read_word(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_pixels[y*${w} + x]);
-      tft.writePixel(c);
-    }
-    tft.endWrite();
-  }
-}
-
-void loop(){}`}</pre>
-          </div>
-          
-          {mode === "BMP" && (
-            <div className="mt-4">
-              <h3 className="font-medium mb-2">BMP Format Examples for {board}</h3>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {board === "ESP8266" ? (
-                  <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// ESP8266 Web Server Example
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-ESP8266WebServer server(80);
-
-void setup() {
-  Serial.begin(115200);
-  
-  // Connect to WiFi
-  WiFi.begin("your_ssid", "your_password");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.println("WiFi connected");
-  Serial.println("IP address: " + WiFi.localIP().toString());
-  
-  // Setup web server routes
-  server.on("/bmp", handleBMP);
-  server.begin();
-}
-
-void loop() {
-  server.handleClient();
-}
-
-void handleBMP() {
-  server.setHeader("Content-Type", "image/bmp");
-  server.setHeader("Content-Disposition", "inline; filename=${name.replace(/[^a-zA-Z0-9_]/g, "_")}.bmp");
-  
-  // Send BMP header
-  for (int i = 0; i < 54; i++) {
-    server.client().write(pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bmp_header[i]));
-  }
-  // Send BMP data
-  for (int i = 0; i < ${name.replace(/[^a-zA-Z0-9_]/g, "_")}_data_size; i++) {
-    server.client().write(pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bmp_data[i]));
-  }
-}`}</pre>
-                ) : board === "ESP32" ? (
-                  <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// ESP32 Web Server Example
-#include <WiFi.h>
-#include <WebServer.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-WebServer server(80);
-
-void setup() {
-  Serial.begin(115200);
-  
-  // Connect to WiFi
-  WiFi.begin("your_ssid", "your_password");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.println("WiFi connected");
-  Serial.println("IP address: " + WiFi.localIP().toString());
-  
-  // Setup web server routes
-  server.on("/bmp", handleBMP);
-  server.begin();
-}
-
-void loop() {
-  server.handleClient();
-}
-
-void handleBMP() {
-  server.setHeader("Content-Type", "image/bmp");
-  server.setHeader("Content-Disposition", "inline; filename=${name.replace(/[^a-zA-Z0-9_]/g, "_")}.bmp");
-  
-  // Send BMP header
-  for (int i = 0; i < 54; i++) {
-    server.write(pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bmp_header[i]));
-  }
-  // Send BMP data
-  for (int i = 0; i < ${name.replace(/[^a-zA-Z0-9_]/g, "_")}_data_size; i++) {
-    server.write(pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bmp_data[i]));
-  }
-}`}</pre>
-                ) : (
-                  <pre className="bg-neutral-950 rounded-xl p-3 overflow-auto text-xs">{`// Arduino Example - Copy image data to Serial
-#include <Arduino.h>
-#include "${name.replace(/[^a-zA-Z0-9_]/g, "_")}.h"
-
-void setup() {
-  Serial.begin(9600);
-  
-  // Print BMP header
-  Serial.println("BMP Header:");
-  for (int i = 0; i < 54; i++) {
-    Serial.print("0x");
-    Serial.print(pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bmp_header[i]), HEX);
-    Serial.print(", ");
-    if ((i + 1) % 16 == 0) Serial.println();
-  }
-  Serial.println();
-  
-  // Print BMP data
-  Serial.println("BMP Data:");
-  for (int i = 0; i < ${name.replace(/[^a-zA-Z0-9_]/g, "_")}_data_size; i++) {
-    Serial.print("0x");
-    Serial.print(pgm_read_byte(&${name.replace(/[^a-zA-Z0-9_]/g, "_")}_bmp_data[i]), HEX);
-    Serial.print(", ");
-    if ((i + 1) % 16 == 0) Serial.println();
-  }
-  Serial.println();
-  Serial.println("Image dimensions: " + String(${name.replace(/[^a-zA-Z0-9_]/g, "_")}_w) + "x" + String(${name.replace(/[^a-zA-Z0-9_]/g, "_")}_h));
-}
-
-void loop() {
-  // Your main code here
-}`}</pre>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Tests */}
-        <div className="bg-neutral-900 rounded-2xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-medium">Built-in Tests</h2>
-            <button onClick={runTests} className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm">Run Tests</button>
-          </div>
-          {testResults.length > 0 && (
-            <div className="space-y-2 text-sm">
-              {testResults.map((t, i) => (
-                <div key={i} className={`p-2 rounded-xl ${t.pass ? 'bg-emerald-900/30 text-emerald-300' : 'bg-rose-900/30 text-rose-300'}`}>
-                  <div className="font-medium">{t.pass ? 'PASS' : 'FAIL'} — {t.name}</div>
-                  {!t.pass && (
-                    <div className="opacity-70 font-mono">
-                      got: {JSON.stringify(t.got)}; expected: {JSON.stringify(t.expect)}
-                    </div>
-                  )}
-                </div>
-              ))}
-              <div className={`p-2 rounded-xl ${testsPassed ? 'bg-emerald-800/30 text-emerald-200' : 'bg-rose-800/30 text-rose-200'}`}>
-                Overall: {testsPassed ? '✅ All tests passed' : '❌ Some tests failed'}
-              </div>
-            </div>
-          )}
-          {testResults.length === 0 && (
-            <div className="text-xs opacity-70">Click "Run Tests" to validate 1‑bit packing and RGB565 conversion.</div>
-          )}
-        </div>
-
-        <footer className="text-xs opacity-60 text-center">Made for makers. No tracking, all local. ✨</footer>
       </div>
     </div>
   );
