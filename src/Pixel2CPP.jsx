@@ -55,7 +55,7 @@ export default function Pixel2CPP() {
   const [copyStatus, setCopyStatus] = useState(""); // "", "copied", "error"
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState("Editor"); // Editor | Snippets | Tests
-  const [sidebarTab, setSidebarTab] = useState("settings"); // settings | tools
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Pixel buffer
   const [data, setData] = useState(() => Array.from({ length: w * h }, () => transparent()));
@@ -1131,457 +1131,291 @@ const GFXfont ${safeName} PROGMEM = {
         </header>
 
         <div className="flex flex-1 min-h-0">
-          {/* Sidebar with Tabs */}
-          <aside className="w-80 min-w-[16rem] max-w-[22rem] bg-neutral-900 border-r border-neutral-800 flex flex-col">
-            {/* Sidebar Tab Navigation */}
-            <div className="flex border-b border-neutral-800">
+          {/* Collapsible Sidebar */}
+          <aside className={`${sidebarCollapsed ? 'w-16' : 'w-80'} min-w-0 bg-neutral-900 border-r border-neutral-800 flex flex-col transition-all duration-300`}>
+            {/* Sidebar Header with Toggle */}
+            <div className="flex items-center justify-between p-4 border-b border-neutral-800">
+              {!sidebarCollapsed && (
+                <h2 className="font-semibold text-lg">Tools & Settings</h2>
+              )}
               <button
-                onClick={() => setSidebarTab("settings")}
-                className={`flex-1 px-4 py-3 text-sm font-medium transition-all ${
-                  sidebarTab === "settings" 
-                    ? 'bg-neutral-800 text-blue-400 border-b-2 border-blue-500' 
-                    : 'text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50'
-                }`}
-                aria-label="Settings tab"
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                className="p-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 transition-colors"
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
-                ⚙️ Settings
-              </button>
-              <button
-                onClick={() => setSidebarTab("tools")}
-                className={`flex-1 px-4 py-3 text-sm font-medium transition-all ${
-                  sidebarTab === "tools" 
-                    ? 'bg-neutral-800 text-emerald-400 border-b-2 border-emerald-500' 
-                    : 'text-neutral-400 hover:text-neutral-300 hover:bg-neutral-800/50'
-                }`}
-                aria-label="Tools and shortcuts tab"
-              >
-                🛠️ Tools & Shortcuts
+                {sidebarCollapsed ? "→" : "←"}
               </button>
             </div>
 
             {/* Sidebar Content */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {sidebarTab === "settings" && (
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+              {!sidebarCollapsed && (
                 <>
+                  {/* Quick Tools */}
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-sm text-neutral-300">Quick Tools</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
+                        <button 
+                          key={k} 
+                          onClick={() => setTool(k)} 
+                          className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                            tool === k 
+                              ? "bg-emerald-500 text-black shadow-lg" 
+                              : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+                          }`}
+                          aria-label={`Select ${k} tool`}
+                        >
+                          {k.charAt(0).toUpperCase() + k.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Colors */}
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-sm text-neutral-300">Colors</h3>
+                    <div className="flex items-center gap-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs text-neutral-400">Primary</span>
+                        <input 
+                          type="color" 
+                          value={rgbaToHex(primary)} 
+                          onChange={(e) => setPrimary(parseCssColor(e.target.value))} 
+                          className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
+                          aria-label="Primary color picker"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs text-neutral-400">Secondary</span>
+                        <input 
+                          type="color" 
+                          value={rgbaToHex(secondary)} 
+                          onChange={(e) => setSecondary(parseCssColor(e.target.value))} 
+                          className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
+                          aria-label="Secondary color picker"
+                        />
+                      </div>
+                      <button 
+                        onClick={swapColors} 
+                        className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs transition-colors self-end"
+                        aria-label="Swap primary and secondary colors"
+                      >
+                        Swap
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Canvas Settings */}
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-semibold text-lg">Canvas Settings</h2>
-                      <div className="w-4 h-4 bg-blue-500 rounded-full"></div>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
-                        <label className="flex flex-col gap-1">
-                          <span className="text-sm font-medium text-neutral-300">Width</span>
-                          <input 
-                            type="number" 
-                            min={1} 
-                            max={256} 
-                            value={w} 
-                            onChange={(e) => setW(clamp(parseInt(e.target.value) || 1, 1, 256))} 
-                            className="w-full bg-neutral-800 rounded px-3 py-2 border border-neutral-700 focus:border-blue-500 transition-colors" 
-                            aria-label="Canvas width in pixels"
-                          />
-                        </label>
-                        <label className="flex flex-col gap-1">
-                          <span className="text-sm font-medium text-neutral-300">Height</span>
-                          <input 
-                            type="number" 
-                            min={1} 
-                            max={256} 
-                            value={h} 
-                            onChange={(e) => setH(clamp(parseInt(e.target.value) || 1, 1, 256))} 
-                            className="w-full bg-neutral-800 rounded px-3 py-2 border border-neutral-700 focus:border-blue-500 transition-colors" 
-                            aria-label="Canvas height in pixels"
-                          />
-                        </label>
-                      </div>
-                      
-                      <label className="flex flex-col gap-2">
-                        <span className="text-sm font-medium text-neutral-300">Zoom Level</span>
-                        <div className="flex items-center gap-3">
-                          <input 
-                            type="range" 
-                            min={4} 
-                            max={32} 
-                            value={zoom} 
-                            onChange={(e) => setZoom(parseInt(e.target.value))} 
-                            className="flex-1" 
-                            aria-label="Canvas zoom level"
-                          />
-                          <span className="text-sm text-neutral-400 min-w-[2rem]">{zoom}x</span>
-                        </div>
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-sm text-neutral-300">Canvas</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs text-neutral-400">Width</span>
+                        <input 
+                          type="number" 
+                          min={1} 
+                          max={256} 
+                          value={w} 
+                          onChange={(e) => setW(clamp(parseInt(e.target.value) || 1, 1, 256))} 
+                          className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-blue-500 transition-colors" 
+                          aria-label="Canvas width in pixels"
+                        />
                       </label>
-                      
-                      <div className="space-y-2">
-                        <span className="text-sm font-medium text-neutral-300">Canvas Options</span>
-                        <div className="flex flex-wrap gap-3">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={mirrorX} 
-                              onChange={(e) => setMirrorX(e.target.checked)} 
-                              className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
-                              aria-label="Mirror drawing horizontally"
-                            />
-                            <span className="text-sm">Mirror X</span>
-                          </label>
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={mirrorY} 
-                              onChange={(e) => setMirrorY(e.target.checked)} 
-                              className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
-                              aria-label="Mirror drawing vertically"
-                            />
-                            <span className="text-sm">Mirror Y</span>
-                          </label>
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <span className="text-sm font-medium text-neutral-300">Background Color</span>
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-2 gap-2">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name="backgroundColor" 
-                                value="black" 
-                                checked={backgroundColor === "black"} 
-                                onChange={(e) => setBackgroundColor(e.target.value)} 
-                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
-                                aria-label="Black background"
-                              />
-                              <span className="text-sm">Black</span>
-                            </label>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name="backgroundColor" 
-                                value="white" 
-                                checked={backgroundColor === "white"} 
-                                onChange={(e) => setBackgroundColor(e.target.value)} 
-                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
-                                aria-label="White background"
-                              />
-                              <span className="text-sm">White</span>
-                            </label>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name="backgroundColor" 
-                                value="transparent" 
-                                checked={backgroundColor === "transparent"} 
-                                onChange={(e) => setBackgroundColor(e.target.value)} 
-                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
-                                aria-label="Transparent background"
-                              />
-                              <span className="text-sm">Transparent</span>
-                            </label>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name="backgroundColor" 
-                                value="custom" 
-                                checked={backgroundColor === "custom"} 
-                                onChange={(e) => setBackgroundColor(e.target.value)} 
-                                className="w-4 h-4 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
-                                aria-label="Custom background color"
-                              />
-                              <span className="text-sm">Custom</span>
-                            </label>
-                          </div>
-                          {backgroundColor === "custom" && (
-                            <div className="flex items-center gap-2">
-                              <input 
-                                type="color" 
-                                value={customBackgroundColor} 
-                                onChange={(e) => setCustomBackgroundColor(e.target.value)} 
-                                className="w-8 h-8 bg-neutral-800 rounded border border-neutral-700 cursor-pointer" 
-                                aria-label="Custom background color picker"
-                              />
-                              <input 
-                                type="text" 
-                                value={customBackgroundColor} 
-                                onChange={(e) => setCustomBackgroundColor(e.target.value)} 
-                                className="flex-1 bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-blue-500 transition-colors" 
-                                placeholder="#000000"
-                                aria-label="Custom background color hex value"
-                              />
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-xs text-neutral-400">Height</span>
+                        <input 
+                          type="number" 
+                          min={1} 
+                          max={256} 
+                          value={h} 
+                          onChange={(e) => setH(clamp(parseInt(e.target.value) || 1, 1, 256))} 
+                          className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-blue-500 transition-colors" 
+                          aria-label="Canvas height in pixels"
+                        />
+                      </label>
                     </div>
+                    
+                    <label className="flex flex-col gap-1">
+                      <span className="text-xs text-neutral-400">Zoom: {zoom}×</span>
+                      <input 
+                        type="range" 
+                        min={4} 
+                        max={32} 
+                        value={zoom} 
+                        onChange={(e) => setZoom(parseInt(e.target.value))} 
+                        className="w-full" 
+                        aria-label="Canvas zoom level"
+                      />
+                    </label>
                   </div>
 
                   {/* Export Settings */}
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-semibold text-lg">Export Settings</h2>
-                      <div className="w-4 h-4 bg-purple-500 rounded-full"></div>
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-sm text-neutral-300">Export</h3>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-xs text-neutral-400">Format</span>
+                      <select 
+                        value={drawMode} 
+                        onChange={(e) => setDrawMode(e.target.value)} 
+                        className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-purple-500 transition-colors"
+                        aria-label="Select draw mode"
+                      >
+                        <option value="HORIZONTAL_1BIT">1-bit (SSD1306)</option>
+                        <option value="VERTICAL_1BIT">1-bit Vertical</option>
+                        <option value="HORIZONTAL_RGB565">RGB565 (TFT)</option>
+                        <option value="HORIZONTAL_ALPHA">Alpha Map</option>
+                        <option value="HORIZONTAL_RGB888_24">RGB24 (24-bit)</option>
+                        <option value="HORIZONTAL_RGB888_32">RGBA32 (32-bit)</option>
+                      </select>
+                    </label>
+                    
+                    <label className="flex flex-col gap-1">
+                      <span className="text-xs text-neutral-400">Output</span>
+                      <select 
+                        value={outputFormat} 
+                        onChange={(e) => setOutputFormat(e.target.value)} 
+                        className="w-full bg-neutral-800 rounded px-2 py-1 text-xs border border-neutral-700 focus:border-purple-500 transition-colors"
+                        aria-label="Select output format"
+                      >
+                        <option value="ARDUINO_CODE">Arduino Code</option>
+                        <option value="PLAIN_BYTES">Plain Bytes</option>
+                        <option value="ARDUINO_SINGLE_BITMAP">Single Bitmap</option>
+                        <option value="GFX_BITMAP_FONT">GFX Font</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {/* Canvas Actions */}
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-sm text-neutral-300">Actions</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button 
+                        onClick={clearCanvas} 
+                        className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs transition-colors"
+                        aria-label="Clear canvas"
+                      >
+                        Clear
+                      </button>
+                      <button 
+                        onClick={() => { 
+                          if (canUndo) {
+                            setRedo((r) => [data.map(p=>({...p})), ...r]); 
+                            const last = history[history.length - 1]; 
+                            setHistory((h) => h.slice(0, -1)); 
+                            setData(last.map(p => ({ ...p }))); 
+                          }
+                        }} 
+                        disabled={!canUndo} 
+                        className={`px-3 py-2 rounded-lg text-xs transition-colors ${
+                          canUndo 
+                            ? "bg-neutral-800 hover:bg-neutral-700" 
+                            : "bg-neutral-900 opacity-50 cursor-not-allowed"
+                        }`}
+                        aria-label="Undo last action"
+                      >
+                        Undo
+                      </button>
                     </div>
-                    <div className="space-y-3">
-                      <label className="flex flex-col gap-1">
-                        <span className="text-sm font-medium text-neutral-300">Draw mode:</span>
-                        <select 
-                          value={drawMode} 
-                          onChange={(e) => setDrawMode(e.target.value)} 
-                          className="w-full bg-neutral-800 rounded-lg px-3 py-2 text-sm border border-neutral-700 focus:border-purple-500 transition-colors"
-                          aria-label="Select draw mode"
-                        >
-                          <option value="HORIZONTAL_1BIT">Horizontal - 1 bit per pixel</option>
-                          <option value="VERTICAL_1BIT">Vertical - 1 bit per pixel</option>
-                          <option value="HORIZONTAL_RGB565">Horizontal - 2 bytes per pixel (565)</option>
-                          <option value="HORIZONTAL_ALPHA">Horizontal - 1 bit per pixel alpha map</option>
-                          <option value="HORIZONTAL_RGB888_24">Horizontal - 3 bytes per pixel (rgb888)</option>
-                          <option value="HORIZONTAL_RGB888_32">Horizontal - 4 bytes per pixel (rgba888)</option>
-                        </select>
+                  </div>
+
+                  {/* Canvas Options */}
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-sm text-neutral-300">Options</h3>
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={mirrorX} 
+                          onChange={(e) => setMirrorX(e.target.checked)} 
+                          className="w-3 h-3 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
+                          aria-label="Mirror drawing horizontally"
+                        />
+                        <span className="text-xs">Mirror X</span>
                       </label>
-                      
-                      <label className="flex flex-col gap-1">
-                        <span className="text-sm font-medium text-neutral-300">Code output format:</span>
-                        <select 
-                          value={outputFormat} 
-                          onChange={(e) => setOutputFormat(e.target.value)} 
-                          className="w-full bg-neutral-800 rounded-lg px-3 py-2 text-sm border border-neutral-700 focus:border-purple-500 transition-colors"
-                          aria-label="Select output format"
-                        >
-                          <option value="ARDUINO_CODE">Arduino code</option>
-                          <option value="PLAIN_BYTES">Plain bytes</option>
-                          <option value="ARDUINO_SINGLE_BITMAP">Arduino code, single bitmap</option>
-                          <option value="GFX_BITMAP_FONT">Adafruit GFXbitmapFont</option>
-                        </select>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={mirrorY} 
+                          onChange={(e) => setMirrorY(e.target.checked)} 
+                          className="w-3 h-3 text-blue-500 bg-neutral-800 border-neutral-700 rounded focus:ring-blue-500"
+                          aria-label="Mirror drawing vertically"
+                        />
+                        <span className="text-xs">Mirror Y</span>
                       </label>
                     </div>
                   </div>
 
-                  {/* Canvas Actions */}
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-semibold text-lg">Canvas Actions</h2>
-                      <div className="w-4 h-4 bg-orange-500 rounded-full"></div>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-3 gap-2">
-                        <button 
-                          onClick={clearCanvas} 
-                          className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm transition-colors"
-                          aria-label="Clear canvas"
-                        >
-                          Clear
-                        </button>
-                        <button 
-                          onClick={() => { 
-                            if (canUndo) {
-                              setRedo((r) => [data.map(p=>({...p})), ...r]); 
-                              const last = history[history.length - 1]; 
-                              setHistory((h) => h.slice(0, -1)); 
-                              setData(last.map(p => ({ ...p }))); 
-                            }
-                          }} 
-                          disabled={!canUndo} 
-                          className={`px-3 py-2 rounded-lg text-sm transition-colors ${
-                            canUndo 
-                              ? "bg-neutral-800 hover:bg-neutral-700" 
-                              : "bg-neutral-900 opacity-50 cursor-not-allowed"
-                          }`}
-                          aria-label="Undo last action"
-                        >
-                          Undo
-                        </button>
-                        <button 
-                          onClick={() => { 
-                            if (!canRedo) return; 
-                            const [next, ...rest] = redo; 
-                            setHistory((h) => [...h, data.map(p=>({...p}))]); 
-                            setData(next.map(p => ({ ...p }))); 
-                            setRedo(rest); 
-                          }} 
-                          disabled={!canRedo} 
-                          className={`px-3 py-2 rounded-lg text-sm transition-colors ${
-                            canRedo 
-                              ? "bg-neutral-800 hover:bg-neutral-700" 
-                              : "bg-neutral-900 opacity-50 cursor-not-allowed"
-                          }`}
-                          aria-label="Redo last undone action"
-                        >
-                          Redo
-                        </button>
-                      </div>
+                  {/* Background */}
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-sm text-neutral-300">Background</h3>
+                    <div className="grid grid-cols-2 gap-2">
+                      {["black", "white", "transparent"].map((bg) => (
+                        <label key={bg} className="flex items-center gap-2 cursor-pointer">
+                          <input 
+                            type="radio" 
+                            name="backgroundColor" 
+                            value={bg} 
+                            checked={backgroundColor === bg} 
+                            onChange={(e) => setBackgroundColor(e.target.value)} 
+                            className="w-3 h-3 text-blue-500 bg-neutral-800 border-neutral-700 focus:ring-blue-500"
+                            aria-label={`${bg} background`}
+                          />
+                          <span className="text-xs capitalize">{bg}</span>
+                        </label>
+                      ))}
                     </div>
                   </div>
                 </>
               )}
 
-              {sidebarTab === "tools" && (
-                <>
-                  {/* Drawing Tools */}
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-semibold text-lg">Drawing Tools</h2>
-                      <div className="w-4 h-4 bg-emerald-500 rounded-full"></div>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-2">
-                        {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
-                          <button 
-                            key={k} 
-                            onClick={() => setTool(k)} 
-                            className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-                              tool === k 
-                                ? "bg-emerald-500 text-black shadow-lg" 
-                                : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
-                            }`}
-                            aria-label={`Select ${k} tool`}
-                          >
-                            {k.charAt(0).toUpperCase() + k.slice(1)}
-                          </button>
-                        ))}
-                      </div>
-                      
-                      <div className="space-y-3">
-                        <span className="text-sm font-medium text-neutral-300">Colors</span>
-                        <div className="flex items-center gap-3">
-                          <div className="flex flex-col gap-1">
-                            <span className="text-xs text-neutral-400">Primary</span>
-                            <input 
-                              type="color" 
-                              value={rgbaToHex(primary)} 
-                              onChange={(e) => setPrimary(parseCssColor(e.target.value))} 
-                              className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
-                              aria-label="Primary color picker"
-                            />
-                          </div>
-                          <div className="flex flex-col gap-1">
-                            <span className="text-xs text-neutral-400">Secondary (RMB)</span>
-                            <input 
-                              type="color" 
-                              value={rgbaToHex(secondary)} 
-                              onChange={(e) => setSecondary(parseCssColor(e.target.value))} 
-                              className="w-12 h-10 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
-                              aria-label="Secondary color picker"
-                            />
-                          </div>
-                          <button 
-                            onClick={swapColors} 
-                            className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm transition-colors self-end"
-                            aria-label="Swap primary and secondary colors"
-                          >
-                            Swap
-                          </button>
-                        </div>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <span className="text-sm font-medium text-neutral-300">Current Settings</span>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Draw mode:</span>
-                            <span className="font-mono text-blue-400">{drawMode}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Output:</span>
-                            <span className="font-mono text-purple-400">{outputFormat}</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="text-xs text-neutral-500 bg-neutral-800/50 p-2 rounded-lg">
-                        💡 Tip: Right‑click draws with Secondary color. Eyedropper picks Primary from canvas.
-                      </div>
-                    </div>
+              {/* Collapsed Sidebar Icons */}
+              {sidebarCollapsed && (
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-2">
+                    {(["pen", "erase", "fill", "eyedropper"]).map((k) => (
+                      <button 
+                        key={k} 
+                        onClick={() => setTool(k)} 
+                        className={`p-2 rounded-lg text-xs font-medium transition-all ${
+                          tool === k 
+                            ? "bg-emerald-500 text-black shadow-lg" 
+                            : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+                        }`}
+                        title={k.charAt(0).toUpperCase() + k.slice(1)}
+                        aria-label={`Select ${k} tool`}
+                      >
+                        {k === "pen" ? "🖊️" : k === "erase" ? "🧽" : k === "fill" ? "🪣" : "👁️"}
+                      </button>
+                    ))}
                   </div>
-
-                  {/* Keyboard Shortcuts */}
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-semibold text-lg">Keyboard Shortcuts</h2>
-                      <div className="w-4 h-4 bg-yellow-500 rounded-full"></div>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="space-y-2 text-xs">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Left Click:</span>
-                            <span className="font-mono text-white">Draw (Primary)</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Right Click:</span>
-                            <span className="font-mono text-white">Draw (Secondary)</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Ctrl+Z:</span>
-                            <span className="font-mono text-white">Undo</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Ctrl+Y:</span>
-                            <span className="font-mono text-white">Redo</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <span className="text-sm font-medium text-neutral-300">Tool Shortcuts</span>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">B:</span>
-                            <span className="font-mono text-white">Brush/Pen</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">E:</span>
-                            <span className="font-mono text-white">Erase</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">F:</span>
-                            <span className="font-mono text-white">Fill</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">I:</span>
-                            <span className="font-mono text-white">Eyedropper</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">C:</span>
-                            <span className="font-mono text-white">Clear Canvas</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">X:</span>
-                            <span className="font-mono text-white">Swap Colors</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <span className="text-sm font-medium text-neutral-300">Zoom Shortcuts</span>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Ctrl++:</span>
-                            <span className="font-mono text-white">Zoom In</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Ctrl+-:</span>
-                            <span className="font-mono text-white">Zoom Out</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-neutral-400">Ctrl+0:</span>
-                            <span className="font-mono text-white">Reset Zoom</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-neutral-500 bg-neutral-800/50 p-2 rounded-lg text-xs">
-                        💡 Tip: Use the eyedropper tool to pick colors from your canvas
-                      </div>
-                    </div>
+                  
+                  <div className="flex flex-col gap-2">
+                    <input 
+                      type="color" 
+                      value={rgbaToHex(primary)} 
+                      onChange={(e) => setPrimary(parseCssColor(e.target.value))} 
+                      className="w-8 h-8 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
+                      title="Primary color"
+                      aria-label="Primary color picker"
+                    />
+                    <input 
+                      type="color" 
+                      value={rgbaToHex(secondary)} 
+                      onChange={(e) => setSecondary(parseCssColor(e.target.value))} 
+                      className="w-8 h-8 bg-neutral-800 rounded-lg border border-neutral-700 cursor-pointer" 
+                      title="Secondary color"
+                      aria-label="Secondary color picker"
+                    />
                   </div>
-                </>
+                </div>
               )}
             </div>
           </aside>
 
-          {/* Main */}
+          {/* Main Content Area */}
           <main className="flex-1 min-w-0 flex flex-col">
+            {/* Simplified Tab Navigation */}
             <nav className="flex items-center gap-2 border-b border-neutral-800 px-4 py-3 bg-neutral-900/50">
               {(["Editor", "Snippets", "Tests"]).map((tab) => (
                 <button
@@ -1598,11 +1432,10 @@ const GFXfont ${safeName} PROGMEM = {
                 </button>
               ))}
             </nav>
+
             <div className="flex-1 min-h-0 p-4 overflow-auto">
               {activeTab === 'Editor' && (
                 <div className="space-y-4">
-
-                  
                   {/* Canvas Container */}
                   <div className="bg-neutral-900 rounded-2xl p-4 overflow-auto inline-block shadow-xl border border-neutral-700">
                     <PixelCanvas
@@ -1637,6 +1470,69 @@ const GFXfont ${safeName} PROGMEM = {
                       <div className="text-center">
                         <div className="text-neutral-400">Draw Mode</div>
                         <div className="font-mono text-blue-400 text-xs">{drawMode}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Keyboard Shortcuts Help */}
+                  <div className="bg-neutral-900/50 rounded-xl p-4 border border-neutral-700">
+                    <h3 className="font-medium text-sm mb-3">Keyboard Shortcuts</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                      <div className="space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">B:</span>
+                          <span className="font-mono text-white">Brush</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">E:</span>
+                          <span className="font-mono text-white">Erase</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">F:</span>
+                          <span className="font-mono text-white">Fill</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">I:</span>
+                          <span className="font-mono text-white">Eyedropper</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">C:</span>
+                          <span className="font-mono text-white">Clear</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">X:</span>
+                          <span className="font-mono text-white">Swap Colors</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">Ctrl+Z:</span>
+                          <span className="font-mono text-white">Undo</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">Ctrl+Y:</span>
+                          <span className="font-mono text-white">Redo</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">Ctrl++:</span>
+                          <span className="font-mono text-white">Zoom In</span>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">Ctrl+-:</span>
+                          <span className="font-mono text-white">Zoom Out</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">Ctrl+0:</span>
+                          <span className="font-mono text-white">Reset Zoom</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-neutral-400">RMB:</span>
+                          <span className="font-mono text-white">Secondary Color</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1776,8 +1672,6 @@ void drawGrayImage(int16_t x0, int16_t y0) {
 void loop(){}`}</pre>
                     </div>
                   </div>
-
-
                 </div>
               )}
 
